@@ -61,7 +61,7 @@ def run(a):
     mitm = subprocess.Popen(
         ["setpriv", "--pdeathsig", "SIGKILL", "uvx", "--from", "mitmproxy", "mitmdump", "--listen-host", "127.0.0.1",
          "--listen-port", str(a.port), "--set", f"confdir={d}/ca", "--set", f"ssl_verify_upstream_trusted_ca={a.upstream_ca}",
-         "-s", f"{HERE}/p0_3_addon.py"],
+         "-s", a.addon],
         env=dict(os.environ, TW_FLOWS=f"{d}/flows.jsonl"), stdout=open(f"{d}/mitm.log", "w"), stderr=subprocess.STDOUT)
     for _ in range(120):
         try:
@@ -142,7 +142,7 @@ def sweep(a):
 if __name__ == "__main__":
     p = argparse.ArgumentParser(); sp = p.add_subparsers(dest="c", required=True)
     r = sp.add_parser("run"); r.add_argument("--run-dir", required=True); r.add_argument("--port", type=int, required=True)
-    r.add_argument("--upstream-ca", required=True); r.add_argument("cmd", nargs=argparse.REMAINDER)
+    r.add_argument("--upstream-ca", required=True); r.add_argument("--addon", default=os.path.join(HERE, "p0_3_addon.py")); r.add_argument("cmd", nargs=argparse.REMAINDER)
     s = sp.add_parser("sweep"); s.add_argument("--runs-root", required=True)
     a = p.parse_args()
     if a.c == "run":
