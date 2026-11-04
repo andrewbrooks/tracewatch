@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+# run output: captures hold real traffic and must never be committed
+out/
+*.log
+# editor
+.vscode/
+*.code-workspace
+.DS_Store
