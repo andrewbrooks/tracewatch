@@ -90,6 +90,7 @@ _SHAPES = (
 # name <sep> value, in free text (JSON-ish, key=value, header lines, argv elements)
 _KV = re.compile(r"""(?P<name>["']?[A-Za-z][\w.\-]*["']?)(?P<sep>\s*[:=]\s*)(?P<q>["']?)(?P<val>[^\s"'&;,<>)}\]\[]+)""")
 _REDACTED = "[REDACTED:"
+_TAG = re.compile(r"\[REDACTED:[A-Za-z0-9_\-]+:[0-9a-f]{8}\]")  # the exact shape Redactor.tag() produces
 
 
 class Redactor:
@@ -120,10 +121,16 @@ class Redactor:
         inside its value: in `https://h/x?api_key=SECRET` the first match is `https`+`:`+`//h/x?api_key=...`
         and consuming all of it would hide the nested `api_key`."""
         out, pos = [], 0
+        spans = [(t.start(), t.end()) for t in _TAG.finditer(s)]  # tags already written by earlier rules
         while True:
             m = _KV.search(s, pos)
             if not m:
                 break
+            inside = next((sp for sp in spans if sp[0] <= m.start() < sp[1]), None)
+            if inside:  # a tag's own text ("bearer", "cookie"...) must never be scanned as a name/value
+                out.append(s[pos : inside[1]])
+                pos = inside[1]
+                continue
             name = m.group("name").strip("\"'")
             tag_follows = s[m.end() : m.end() + 1 + len(_REDACTED)].lstrip().startswith(_REDACTED)
             if name_is_sensitive(name) and not tag_follows:  # tag_follows: val is just a scheme word (`Bearer`)

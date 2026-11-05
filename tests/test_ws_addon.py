@@ -173,3 +173,62 @@ def test_no_response_tee_on_101_upgrade(pa):
     g = tflow.tflow(resp=True)
     pa.responseheaders(g)
     assert g.id in pa._streams and callable(g.response.stream)
+
+
+# ---- resolve / tls / timing records (used by the report) --------------------------------------------
+def test_server_connected_records_the_name_to_ip_answer(pa, tmp_path):
+    from mitmproxy.proxy.server_hooks import ServerConnectionHookData
+
+    server = tflow.tserver_conn()
+    server.address = ("example.com", 443)
+    server.peername = ("93.184.216.34", 443)
+    pa.server_connected(ServerConnectionHookData(server=server, client=tflow.tclient_conn()))
+    (r,) = recs(tmp_path)
+    assert r["kind"] == "resolve" and r["name"] == "example.com" and r["ip"] == "93.184.216.34" and r["port"] == 443
+
+
+def test_tls_established_server_records_version_cipher_and_certificate(pa, tmp_path):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    cert = SimpleNamespace(
+        cn="example.com",
+        issuer=[("CN", "Test CA"), ("O", "Acme")],
+        notbefore=datetime(2026, 1, 1),
+        notafter=datetime(2027, 1, 1),
+    )
+    conn = SimpleNamespace(
+        address=("example.com", 443),
+        sni="example.com",
+        tls_version="TLSv1.3",
+        cipher="TLS_AES_256_GCM_SHA384",
+        alpn=b"h2",
+        certificate_list=[cert],
+    )
+    pa.tls_established_server(SimpleNamespace(conn=conn, context=SimpleNamespace(client=SimpleNamespace(id="C1"))))
+    (r,) = recs(tmp_path)
+    assert r["kind"] == "tls" and r["version"] == "TLSv1.3" and r["alpn"] == "h2" and r["conn_id"] == "C1"
+    assert r["cert"]["issuer_cn"] == "Test CA" and r["cert"]["not_after"].startswith("2027-01-01")
+
+
+def test_tls_hook_tolerates_a_server_with_no_certificate(pa, tmp_path):
+    from types import SimpleNamespace
+
+    conn = SimpleNamespace(
+        address=("h", 1), sni=None, tls_version="TLSv1.2", cipher="x", alpn=None, certificate_list=[]
+    )
+    pa.tls_established_server(SimpleNamespace(conn=conn, context=SimpleNamespace(client=SimpleNamespace(id="C"))))
+    assert recs(tmp_path)[0]["cert"] is None
+
+
+def test_response_records_timing_and_upstream_ip(pa, tmp_path):
+    f = tflow.tflow(resp=True)
+    f.request.timestamp_start, f.request.timestamp_end = 100.0, 100.010
+    f.response.timestamp_start, f.response.timestamp_end = 100.050, 100.200
+    f.server_conn.peername = ("10.0.0.9", 443)
+    pa.responseheaders(f)
+    pa.response(f)
+    r = recs(tmp_path)[-1]
+    assert (
+        r["kind"] == "flow_result" and r["duration_ms"] == 200 and r["ttfb_ms"] == 40 and r["server_ip"] == "10.0.0.9"
+    )

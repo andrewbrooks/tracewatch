@@ -11,7 +11,33 @@ from pathlib import Path
 
 IMAGE = "aquasec/tracee:latest"
 CAP_RESERVE = 4096  # headroom below the cap for the marker line
-EVENTS = "sched_process_exec,sched_process_exit,net_tcp_connect"
+EVENTS = "sched_process_exec,sched_process_exit,net_tcp_connect,security_socket_connect"
+
+# File activity is high-volume (every process opens dozens of libraries), so only these paths are watched,
+# filtered inside Tracee. Tracee's string filter supports only a PREFIX (`/tmp/*`) or a SUFFIX (`*/id_rsa`)
+# wildcard, not "contains", so credential stores are matched by file name and by well-known directory.
+SENSITIVE_NAMES = (
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "credentials", ".netrc", ".git-credentials", ".npmrc",
+    ".pypirc", ".pgpass", ".env", "kubeconfig",
+)  # fmt: skip
+SENSITIVE_SUFFIXES = (".pem", ".p12", ".pfx", ".kdbx")
+SENSITIVE_HOME_DIRS = (".ssh", ".aws", ".kube", ".gnupg", ".docker", ".config/gcloud", ".azure")
+SENSITIVE_ABSOLUTE = ("/etc/shadow", "/etc/gshadow", "/etc/sudoers", "/etc/sudoers.d/*", "/root/.ssh/*", "/root/.aws/*")
+STAGING_DIRS = ("/tmp/*", "/var/tmp/*", "/dev/shm/*")
+
+
+def file_watch_patterns(homes: list[str] | None = None) -> list[str]:
+    """The path patterns passed to Tracee's security_file_open filter (also recorded in the manifest)."""
+    import os
+
+    homes = homes if homes is not None else sorted({os.path.expanduser("~"), os.environ.get("HOME", "")} - {""})
+    pats = [f"*/{n}" for n in SENSITIVE_NAMES] + [f"*{x}" for x in SENSITIVE_SUFFIXES]
+    pats += list(SENSITIVE_ABSOLUTE)
+    pats += [f"{h.rstrip('/')}/{d}/*" for h in homes for d in SENSITIVE_HOME_DIRS]
+    pats += list(STAGING_DIRS)
+    return list(dict.fromkeys(pats))
+
+
 _BASE = [
     "--pid=host",
     "--cgroupns=host",
@@ -95,8 +121,12 @@ def remove(name: str) -> None:
     subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-def scoped_args(host_pid: int) -> list[str]:
-    return ["--events", EVENTS, "--scope", f"tree={host_pid}", "--output", "json"]
+def scoped_args(host_pid: int, file_patterns: list[str] | None = None) -> list[str]:
+    pats = file_watch_patterns() if file_patterns is None else file_patterns
+    args = ["--events", EVENTS]
+    if pats:
+        args += ["--events", f"security_file_open.data.pathname={','.join(pats)}"]
+    return args + ["--scope", f"tree={host_pid}", "--output", "json"]
 
 
 class Collector(threading.Thread):

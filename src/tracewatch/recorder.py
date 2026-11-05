@@ -126,6 +126,9 @@ def record(o: Options) -> int:
             print(f"tracewatch: cannot record: {pr}", file=sys.stderr)
         return EX_RECORDER_FAILED
     os.umask(0o077)  # run directories hold captured traffic: every file we or our children create is private
+    # ABSOLUTE paths only: the CA bundle and every proxy variable handed to the target point inside the run directory,
+    # and a target that changes directory (cd /tmp) would otherwise lose its CA and fail every TLS handshake.
+    o.runs_root = Path(o.runs_root).resolve()
     o.runs_root.mkdir(parents=True, exist_ok=True)
     sweep(o.runs_root, log=say)
     run = RunDir.create(o.runs_root, o.name)
@@ -286,10 +289,12 @@ def record(o: Options) -> int:
         return abort_start("could not learn the root's host pid (is Docker up and Tracee runnable?)")
     m["root_host_pid"] = hp
     run.p("flags/p1").touch()
+    watch = tracee.file_watch_patterns()
+    m["file_watch"] = watch  # the ONLY paths whose opens are recorded: the report must say so
     collector = tracee.Collector(
         run.run_id,
         cname,
-        tracee.scoped_args(hp),
+        tracee.scoped_args(hp, watch),
         run.p(TRACEE),
         run.p(TRACEE_ERR),
         transform=redactor.tracee_line,

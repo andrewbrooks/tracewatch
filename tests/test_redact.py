@@ -267,3 +267,27 @@ def test_nested_pair_inside_non_sensitive_value_is_found(r):
 def test_ordinary_words_containing_sk_are_not_mangled(r):
     text = "the risk-assessment-framework-document and disk-based-storage-system-config"
     assert r.text(text) == text
+
+
+def test_every_tag_has_the_exact_shape_and_none_is_nested(r):
+    """Regression: the kv scan used to re-scan the inside of tags written by earlier rules (a tag contains
+    words like 'bearer'), producing '[REDACTED:bearer:[REDACTED:kv:...]]'. Stable, so idempotence tests passed."""
+    import re
+
+    inputs = [
+        "Authorization: Bearer abcDEF123456789xyz",
+        "curl -H 'Authorization: Bearer abcDEF123456789xyz' https://u:pw99999@h/x?api_key=zz99aa11&q=1",
+        "cookie: sid=abc; Set-Cookie: session=zz99aa11bb; token=abcdef123456 password=hunter2pw",
+        f"x {SECRETS['sk']} {SECRETS['jwt']} {SECRETS['aws']} Basic dXNlcjpwYXNzd29yZA==",
+        '{"authorization":"Bearer abcDEF123456789xyz","cookie":"a=b"}',
+    ]
+    shape = re.compile(r"\[REDACTED:[A-Za-z0-9_\-]+:[0-9a-f]{8}\]")
+    for text in inputs:
+        out = r.text(text)
+        assert out.count("[REDACTED:") == len(shape.findall(out)), out  # every opener is a complete, well-formed tag
+        assert "[REDACTED:" not in shape.sub("", out), out  # nothing left over, nothing nested
+
+
+def test_a_value_after_a_scheme_word_keeps_exactly_one_tag(r):
+    out = r.text("Authorization: Bearer abcDEF123456789xyz")
+    assert out.startswith("Authorization: Bearer [REDACTED:bearer:") and out.count("[REDACTED:") == 1

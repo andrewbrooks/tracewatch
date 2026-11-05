@@ -10,6 +10,7 @@ tracewatch = "tracewatch.cli:main"
 
 [dependency-groups]
 dev = [
+    "playwright>=1.64.1",
     "pytest>=8",
     "ruff>=0.6",
     "websockets>=17.4",
@@ -28,6 +29,13 @@ extend-exclude = ["spikes"]  # frozen Phase 0 evidence, not maintained code
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/tracewatch/findings.py" = ["E501", "UP031"]  # prose-heavy rule texts
+"src/tracewatch/report_md.py" = ["E501"]  # table-building expressions
+"src/tracewatch/report_html.py" = ["E501"]  # the HTML template
+"tests/test_model.py" = ["E501"]  # dense fixture literals
+"tests/browser/*.py" = ["E501", "UP031"]  # long JS snippets and payload literals
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

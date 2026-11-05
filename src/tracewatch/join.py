@@ -119,8 +119,16 @@ def join_records(fl, tr, proxy_port, info=None, tracee_capped=False):
             # Tracee stopped recording at its size cap: a pid it never reported may well be in the tree.
             # "outside-tree" would be a confident claim the data cannot support.
             r["scope"] = "unknown-tracee-capped" if tracee_capped else "outside-tree"
-        r.update(path=f["path"], conn_id=f["conn_id"], client_port=f["client_port"], http_version=f.get("http_version"))
+        r.update(
+            path=f["path"],
+            conn_id=f["conn_id"],
+            flow_id=f.get("flow_id"),
+            client_port=f["client_port"],
+            http_version=f.get("http_version"),
+        )
         out.append(r)
+    if info is not None:
+        info["connections"] = res  # conn_id -> {pid, method, candidates}: every connection, flows or not
     return out
 
 

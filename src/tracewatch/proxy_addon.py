@@ -2,6 +2,8 @@
 
 Records (JSONL, one per line, written with a single os.write so a kill cannot interleave them):
   conn               at client connect: who holds the client socket (pids), keyed by the unique conn_id
+  resolve            the proxy opened an upstream connection: name asked for -> IP it got (DNS, as the proxy saw it)
+  tls                upstream TLS version, cipher, ALPN and certificate subject/issuer/expiry
   connect            a CONNECT tunnel request with its destination (so a tunnel that fails is still visible)
   flow               at REQUEST time (so a flow whose client/server vanished is still on disk)
   flow_result        status, headers, body or error, keyed by flow_id
@@ -316,6 +318,20 @@ def responseheaders(flow: http.HTTPFlow) -> None:
     flow.response.stream = tee
 
 
+def _timing(flow: http.HTTPFlow) -> dict:
+    """Request->response timing and the upstream IP (what the report shows per request)."""
+    out: dict = {}
+    r, p = flow.request, flow.response
+    if r.timestamp_start and p and p.timestamp_end:
+        out["duration_ms"] = round((p.timestamp_end - r.timestamp_start) * 1000)
+    if r.timestamp_end and p and p.timestamp_start:
+        out["ttfb_ms"] = round((p.timestamp_start - r.timestamp_end) * 1000)
+    peer = flow.server_conn.peername if flow.server_conn else None
+    if peer:
+        out["server_ip"] = peer[0]
+    return out
+
+
 def response(flow: http.HTTPFlow) -> None:
     st = _streams.pop(flow.id, None)
 
@@ -325,6 +341,7 @@ def response(flow: http.HTTPFlow) -> None:
             "flow_id": flow.id,
             "status": flow.response.status_code,
             "headers": _red.headers(flow.response.headers.items(multi=True)),
+            **_timing(flow),
         }
         if st is None:
             rec.update(_msg(flow.response))
@@ -333,6 +350,51 @@ def response(flow: http.HTTPFlow) -> None:
         return rec
 
     _emit("flow_result", build)
+
+
+def server_connected(data) -> None:
+    """The proxy opened an upstream connection: this is the DNS answer for the name the client asked for."""
+    srv = data.server
+    peer = srv.peername
+    _emit(
+        "resolve",
+        lambda: {
+            "kind": "resolve",
+            "conn_id": data.client.id,
+            "name": _red.text(str(srv.address[0])),
+            "port": srv.address[1],
+            "ip": peer[0] if peer else None,
+        },
+    )
+
+
+def tls_established_server(data) -> None:
+    """Upstream TLS facts (version, cipher, ALPN, certificate subject/issuer/expiry)."""
+    c = data.conn
+
+    def build() -> dict:
+        cert = c.certificate_list[0] if c.certificate_list else None
+        issuer = dict(cert.issuer) if cert else {}
+        return {
+            "kind": "tls",
+            "conn_id": data.context.client.id,
+            "host": _red.text(str(c.address[0])),
+            "sni": c.sni,
+            "version": c.tls_version,
+            "cipher": c.cipher,
+            "alpn": c.alpn.decode("ascii", "replace") if c.alpn else None,
+            "cert": {
+                "subject_cn": cert.cn,
+                "issuer_cn": issuer.get("CN"),
+                "issuer_o": issuer.get("O"),
+                "not_before": cert.notbefore.isoformat(),
+                "not_after": cert.notafter.isoformat(),
+            }
+            if cert
+            else None,
+        }
+
+    _emit("tls", build)
 
 
 def _ws_state(flow) -> dict:
