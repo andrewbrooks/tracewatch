@@ -42,6 +42,14 @@ class Options:
     upstream_ca: str | None = None
     name: str | None = None
     drain_s: float = 3.0
+    # What happens to the TARGET when recording becomes untrustworthy:
+    #  on_recorder_death: the recorder process itself dies (even kill -9). "stop" = the kernel sends the
+    #    target SIGTERM (PDEATHSIG); "continue" = it keeps running, unrecorded and with a dead proxy.
+    #  on_component_loss: the proxy or Tracee dies while the recorder lives. "continue" = keep going and
+    #    mark the gap; "stop" = SIGTERM the target (SIGKILL after kill_grace_s).
+    on_recorder_death: str = "stop"
+    on_component_loss: str = "continue"
+    kill_grace_s: float = 10.0
     max_flows_bytes: int = 256 * 1024 * 1024  # hard: the proxy stops writing
     soft_flows_bytes: int = 64 * 1024 * 1024  # soft: bodies are no longer stored
     max_tracee_bytes: int = 256 * 1024 * 1024
@@ -132,6 +140,7 @@ def record(o: Options) -> int:
         "recorder_pid": os.getpid(),
         "recorder_start_ticks": start_ticks(os.getpid()),
         "started": stamp(),
+        "policy": {"on_recorder_death": o.on_recorder_death, "on_component_loss": o.on_component_loss},
         "limits": {
             "max_flows_bytes": o.max_flows_bytes,
             "soft_flows_bytes": o.soft_flows_bytes,
@@ -157,6 +166,18 @@ def record(o: Options) -> int:
     collector: tracee.Collector | None = None
     root: subprocess.Popen | None = None
 
+    kill_deadline: list[float] = []  # set once the target has been asked to stop on our initiative
+
+    def stop_target(reason: str) -> None:
+        if root is None or root.poll() is not None or kill_deadline:
+            return
+        m["target_stopped"] = {"reason": reason, **stamp()}
+        ev.emit("target_stopped", reason=reason)
+        run.write_manifest(m)
+        say(f"stopping the target: {reason}")
+        root.send_signal(signal.SIGTERM)
+        kill_deadline.append(time.monotonic() + o.kill_grace_s)
+
     def lose(component: str, **kw) -> None:
         if component not in lost:
             lost.append(component)
@@ -164,6 +185,8 @@ def record(o: Options) -> int:
             ev.emit("component_died", component=component, **kw)
             run.write_manifest(m)
             say(f"WARNING: {component} died; the recording is degraded from here on")
+            if o.on_component_loss == "stop":
+                stop_target(f"{component} died (policy: on-component-loss=stop)")
 
     def abort_start(why: str) -> int:
         ev.emit("fatal", why=why)
@@ -235,8 +258,12 @@ def record(o: Options) -> int:
         "set": ["HTTPS_PROXY", "HTTP_PROXY", "https_proxy", "http_proxy", *CA_ENV],
         "inherited_no_proxy": os.environ.get("NO_PROXY") or os.environ.get("no_proxy"),
     }
-    root = subprocess.Popen(["bash", "-c", WRAP, "_", str(run.p("flags")), *o.argv], env=env)
+    # PDEATHSIG is kept across exec, so it still applies to the user's command after the wrapper execs it.
+    # It is delivered when the recorder's thread that spawned the root dies, i.e. on any recorder death.
+    guard = ["setpriv", "--pdeathsig", "SIGTERM"] if o.on_recorder_death == "stop" else []
+    root = subprocess.Popen([*guard, "bash", "-c", WRAP, "_", str(run.p("flags")), *o.argv], env=env)
     m["root_pid"] = root.pid
+    m["root_start_ticks"] = start_ticks(root.pid)
     ev.emit("root_held", pid=root.pid)
     run.write_manifest(m)
 
@@ -305,6 +332,9 @@ def record(o: Options) -> int:
             elif not collector.is_alive():
                 lose("tracee-collector", error=collector.error)
         note_caps()
+        if kill_deadline and now > kill_deadline[0] and root.poll() is None:
+            ev.emit("target_killed", why="did not exit after SIGTERM")
+            root.kill()
         if now - last_hb >= HEARTBEAT_S:
             last_hb, seq = now, seq + 1
             ev.emit(
