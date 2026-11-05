@@ -22,9 +22,7 @@ addresses were replaced before rendering (`tests/browser/screenshots.py`).
 
 | | |
 |---|---|
-| ![Process tree](docs/screenshots/process-tree.png) | ![Request details](docs/screenshots/http-detail.png) |
-| ![Findings, light theme](docs/screenshots/findings-light.png) | ![Overview, light theme](docs/screenshots/overview-light.png) |
-| ![A simulated intruder: the chain of notable steps](docs/screenshots/sim-overview-dark.png) | ![A finding with its rule definition](docs/screenshots/sim-finding-detail-dark.png) |
+| ![Process tree](docs/screenshots/process-tree.png) | ![A simulated intruder: the chain of notable steps](docs/screenshots/sim-overview-dark.png) |
 
 ## What it does
 

@@ -18,18 +18,12 @@ from tracewatch.report_html import render  # noqa: E402
 
 SHOTS = [  # name, colour scheme, key to press, viewport, after-hook
     ("overview-dark", "dark", "1", (1400, 900), None),
-    ("overview-light", "light", "1", (1400, 900), None),
     ("process-tree", "dark", "3", (1400, 900), None),
-    ("http-detail", "dark", "8", (1400, 900), "row"),
-    ("findings-light", "light", "2", (1400, 900), None),
-    ("phone-dark", "dark", "1", (390, 844), None),
 ]
 
 
-SIM_SHOTS = [  # the simulated-intruder run: where the chain, the findings drawer and the rule reference show up
+SIM_SHOTS = [  # the simulated-intruder run: the chain of notable steps
     ("sim-overview-dark", "dark", "1", (1400, 900), None),
-    ("sim-finding-detail-dark", "dark", "2", (1400, 900), "finding"),
-    ("sim-rule-reference-light", "light", "2", (1400, 900), "reference"),
 ]
 
 
