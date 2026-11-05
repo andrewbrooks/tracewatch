@@ -14,17 +14,24 @@ function chainNodes(pid) {
   ch.forEach((p, i) => { if (i) c.appendChild(h('span', { class: 'arr' }, '→')); c.appendChild(h('button', { type: 'button', class: 'cn' + (p.id === pid ? ' cur' : ''), title: short(oneLine(p.cmdline), 200), onclick: () => setState({ sel: { type: 'proc', id: p.id } }) }, p.name + ' ', h('span', { class: 'muted mono' }, String(p.pid)))); });
   return c;
 }
-function evItem(e) {
+function evItem(e, neutral) {   // neutral: inside a finding the kind's colour would read as a severity marker (amber square on a HIGH card)
   const kk = KINDS.find(z => z.id === groupOf(e));
   return h('div', { class: 'ev-item', tabindex: '0', onclick: () => setState({ sel: { type: e.kind === 'http' ? 'http' : 'event', id: e.kind === 'http' ? e.detail.flow_id : e.id } }), onkeydown: ev => { if (ev.key === 'Enter') ev.target.click(); } },
-    h('span', { class: 'tt2' }, fmtAt(e.t)), s('svg', { width: 12, height: 12, viewBox: '0 0 12 12', 'aria-hidden': 'true' }, marker(kk.shape, 6, 6, 3.8, KC[kk.id])), h('span', { class: 'mono', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, short(oneLine(e.title), 120)));
+    h('span', { class: 'tt2' }, fmtAt(e.t)), s('svg', { width: 12, height: 12, viewBox: '0 0 12 12', 'aria-hidden': 'true' }, marker(kk.shape, 6, 6, 3.8, neutral ? cssv('--text-2') : KC[kk.id])), h('span', { class: 'mono', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, short(oneLine(e.title), 120)));
 }
 function findingCard(f, compact) {
   return h('div', { class: 'finding', style: { borderLeft: '3px solid ' + SEVC[f.severity] } },
-    h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, sevPill(f.severity), h('span', { class: 'rule' }, f.rule), h('span', { class: 'muted', style: { marginLeft: 'auto' } }, f.category)),
+    h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, sevPill(f.severity), h('span', { class: 'rule' }, f.rule), h('span', { class: 'cat' }, f.category)),
     h('h4', null, f.title), compact ? null : h('p', null, f.why), f.detail ? h('p', { class: 'muted mono', style: { fontSize: '11.5px' } }, short(f.detail, 400)) : null,
-    f.events.length ? h('div', { class: 'ev-list' }, f.events.slice(0, 6).map(id => E.get(id)).filter(Boolean).map(evItem)) : null,
-    f.procs.length ? h('div', { class: 'chain', style: { marginTop: '8px' } }, f.procs.slice(0, 8).map(id => h('button', { type: 'button', class: 'cn', onclick: () => setState({ sel: { type: 'proc', id } }) }, pLabel(id)))) : null);
+    f.events.length ? h('div', { class: 'ev-list' }, f.events.slice(0, 6).map(id => E.get(id)).filter(Boolean).map(e => evItem(e, true))) : null,
+    f.procs.length ? h('div', { class: 'chain', style: { marginTop: '8px' } }, f.procs.slice(0, 8).map(id => h('button', { type: 'button', class: 'cn', onclick: () => setState({ sel: { type: 'proc', id } }) }, pLabel(id)))) : null,
+    compact ? null : ruleDisclosure(f.rule));
+}
+function ruleDisclosure(rule) {   // the dictionary entry, right on the card: what it cannot tell you, what is often benign, how to check
+  const c = (DATA.catalog || {})[rule]; if (!c) return null;
+  const [t] = STATUS_TEXT[c.status] || [c.status];
+  return h('details', { class: 'about-rule' }, h('summary', null, 'About this rule ', h('span', { class: 'rstat ' + c.status }, t)),
+    h('p', { class: 'muted', style: { margin: '6px 0 2px' } }, h('strong', null, 'Cannot tell: '), c.cannot_know), h('p', { class: 'muted', style: { margin: '2px 0' } }, h('strong', null, 'Often benign: '), c.benign.join('; ')), h('p', { class: 'muted', style: { margin: '2px 0 0' } }, h('strong', null, 'Check: '), c.check));
 }
 function headerTable(rows) {
   if (!rows || !rows.length) return h('div', { class: 'muted' }, 'none');
@@ -111,8 +118,11 @@ function findingDrawer(f) {
     h('div', { class: 'db' }, section('What this means', h('p', { style: { margin: 0, color: 'var(--text-2)' } }, f.why), f.detail ? h('p', { class: 'mono muted', style: { fontSize: '11.5px' } }, f.detail) : null),
       section('Rule', h('span', { class: 'mono' }, f.rule), ruleStatus((DATA.catalog || {})[f.rule]), h('p', { class: 'muted', style: { marginBottom: 0 } }, 'Indicators are for a human to judge. A rule firing means "look here"; it cannot know your intent.')),
       ruleAbout((DATA.catalog || {})[f.rule]),
-      f.events.length ? section('Evidence (' + f.events.length + ')', h('div', { class: 'ev-list' }, f.events.map(id => E.get(id)).filter(Boolean).slice(0, 80).map(evItem))) : null,
-      f.procs.length ? section('Processes', f.procs.map(id => h('div', { style: { marginBottom: '8px' } }, chainNodes(id)))) : null)];
+      f.events.length ? section('Evidence (' + f.events.length + ')', h('div', { class: 'ev-list' }, f.events.map(id => E.get(id)).filter(Boolean).slice(0, 80).map(e => evItem(e, true)))) : null,
+      f.procs.length ? section('Processes', f.procs.map(id => h('div', { style: { marginBottom: '8px' } }, chainNodes(id)))) : null,
+      section('Look at it elsewhere', h('div', { style: { display: 'flex', gap: '8px', flexWrap: 'wrap' } },
+        f.events.length ? h('button', { type: 'button', class: 'btn', onclick: () => { const ts = f.events.map(id => E.get(id)).filter(Boolean).map(e => e.t); setState({ tab: 'timeline', range: [Math.max(0, Math.min(...ts) - 2.5e8), Math.min(DUR, Math.max(...ts) + 2.5e8)] }); } }, 'Show in Timeline') : null,
+        f.procs.length ? h('button', { type: 'button', class: 'btn', onclick: () => setState({ tab: 'tree', sel: { type: 'proc', id: f.procs[0] } }) }, 'Show in process tree') : null)))];
 }
 function destDrawer(d) {
   const reqs = d.via === 'proxy' ? DATA.http.filter(x => x.host === d.name && x.port === d.port) : DATA.events.filter(e => e.kind === 'tcp' && e.detail.dst === d.ip && e.detail.port === d.port);
@@ -132,6 +142,7 @@ function syncDrawer() {
     else if (sel.type === 'dest') content = destDrawer(DATA.destinations[sel.id]);
   }
   clear(drawerEl);
+  const appEl = document.getElementById('app'); if (appEl) appEl.classList.toggle('drawer-open', !!content);   // wide screens: the page makes room instead of being covered
   if (content) {
     if (!drawerWasOpen) { drawerOpener = document.activeElement; drawerOpenerKey = (drawerOpener && drawerOpener.getAttribute && (drawerOpener.getAttribute('data-fk') || drawerOpener.dataset.fk)) || null; }   // remember who opened it so Esc can hand focus back
     add(drawerEl, content); drawerEl.classList.add('open'); drawerEl.removeAttribute('aria-hidden'); drawerEl.removeAttribute('inert');

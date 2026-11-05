@@ -94,6 +94,94 @@ function activityChart(opts) {
   requestAnimationFrame(draw);
   return wrap;
 }
+
+/* ===== activity as swim lanes: one row per kind, a mark at each event's exact time, findings along the top ===== */
+function activityLanes() {
+  const wrap = h('div', { style: { position: 'relative' } }), legend = h('div', { class: 'legend', style: { marginBottom: '4px' } }), holder = h('div', null);
+  add(wrap, [legend, holder]);
+  const events = () => DATA.events.filter(e => !(e.kind === 'udp' && e.detail.probe && !S.probes));
+  function draw() {
+    if (!DATA.events.length) { clear(legend); clear(holder).appendChild(emptyState('timeline', 'No activity to chart', 'The recorder saw no events for this run.')); return; }
+    const evs = events(), byKind = Object.fromEntries(KINDS.map(k => [k.id, []]));
+    for (const e of evs) byKind[groupOf(e)].push(e);
+    clear(legend);
+    for (const k of KINDS) legend.appendChild(h('button', { class: 'lg', type: 'button', 'aria-pressed': String(S.kinds[k.id]), title: 'Show or hide ' + k.label, onclick: () => setState({ kinds: { ...S.kinds, [k.id]: !S.kinds[k.id] } }) },
+      s('svg', { width: 11, height: 11, viewBox: '0 0 11 11', 'aria-hidden': 'true' }, marker(k.shape, 5.5, 5.5, 3.6, KC[k.id])), k.label, h('span', { class: 'c num' }, fmtN(byKind[k.id].length))));
+    if (S.range) legend.appendChild(h('button', { class: 'btn', type: 'button', style: { marginLeft: 'auto' }, onclick: () => setState({ range: null }) }, 'Clear time range · ' + fmtAt(S.range[0]) + ' – ' + fmtAt(S.range[1])));
+    const fnd = DATA.findings.filter(f => f.severity !== 'info' && f.t > 0 && f.events.length);
+    const lanes = KINDS.filter(k => S.kinds[k.id] && byKind[k.id].length);
+    const W = Math.max(320, wrap.clientWidth || 800), LW = W < 560 ? 0 : 92, M = { l: LW + 8, r: 12, t: 6, b: 22 }, pw = W - M.l - M.r;
+    const FL = fnd.length ? 36 : 0, LH = 26, ph = FL + lanes.length * LH, H = M.t + ph + M.b, x = t => M.l + Math.min(1, Math.max(0, t / DUR)) * pw;
+    const svg = s('svg', { class: 'chart', width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Activity over time: one row per event kind${fnd.length ? ', with findings marked along the top' : ''}. Use the table view for the exact numbers.` });
+    const ax = s('g', { class: 'axis' });
+    for (const t of timeTicks(0, DUR, Math.max(3, Math.floor(pw / 90)))) { ax.appendChild(s('line', { x1: x(t), x2: x(t), y1: M.t, y2: M.t + ph, class: 'gridline' })); ax.appendChild(s('text', { x: x(t), y: H - 6, 'text-anchor': 'middle' }, tickLabel(t, DUR))); }
+    svg.appendChild(ax);
+    const laneTop = i => M.t + FL + i * LH;
+    lanes.forEach((k, i) => {
+      const y0 = laneTop(i), cy = y0 + LH / 2, list = byKind[k.id];
+      svg.appendChild(s('line', { x1: M.l, x2: W - M.r, y1: y0 + LH, y2: y0 + LH, class: 'gridline' }));
+      if (LW) {
+        svg.appendChild(s('g', null, marker(k.shape, 8, cy, 3.6, KC[k.id])));
+        svg.appendChild(s('text', { x: 18, y: cy + 3.5, class: 'lane-label' }, k.label));
+        svg.appendChild(s('text', { x: LW, y: cy + 3.5, 'text-anchor': 'end', class: 'lane-count' }, fmtN(list.length)));
+      }
+      if (list.length <= pw / 2.4) for (const e of list) svg.appendChild(marker(k.shape, x(e.t), cy, 3.6, KC[k.id]));
+      else {   // too many to mark one by one: a density strip, 3px columns whose height says how many fall in each
+        const cols = Math.max(1, Math.floor(pw / 3)), cnt = new Array(cols).fill(0); for (const e of list) cnt[Math.min(cols - 1, Math.floor(e.t / DUR * cols))]++;
+        const mx = Math.max(...cnt);
+        cnt.forEach((c, j) => { if (c) { const hh = Math.max(3, (LH - 8) * Math.pow(c / mx, 0.6)); svg.appendChild(s('rect', { x: M.l + j * 3, y: cy - hh / 2, width: 2, height: hh, rx: 1, fill: KC[k.id] })); } });
+      }
+    });
+    if (FL) {   // findings: the same glyphs as the severity pills (x = high, warning triangle = medium/low), with a faint stem down through every lane
+      svg.appendChild(s('line', { x1: M.l, x2: W - M.r, y1: M.t + FL, y2: M.t + FL, class: 'gridline' }));
+      if (LW) svg.appendChild(s('text', { x: 18, y: M.t + FL / 2 + 3.5, class: 'lane-label' }, 'Findings'));
+      if (LW) svg.appendChild(s('text', { x: LW, y: M.t + FL / 2 + 3.5, 'text-anchor': 'end', class: 'lane-count' }, fmtN(fnd.length)));
+      for (const f of fnd) {
+        const fx = x(f.t), g = icon(SEVICON[f.severity], 15); g.setAttribute('x', fx - 7.5); g.setAttribute('y', M.t + FL / 2 - 7.5); g.style.color = SEVC[f.severity]; g.style.fill = cssv('--surface');
+        svg.appendChild(s('line', { x1: fx, x2: fx, y1: M.t + FL - 4, y2: M.t + ph, stroke: SEVC[f.severity], 'stroke-width': 1, 'stroke-dasharray': f.severity === 'high' ? '' : '3 3', opacity: 0.35, 'pointer-events': 'none' }));
+        svg.appendChild(g);
+      }
+    }
+    if (DATA.integrity.untrusted_after_mono) {
+      const ux = x(untrustedAt()), nearEdge = ux > W - M.r - 90;
+      svg.appendChild(s('rect', { x: ux, y: M.t, width: Math.max(0, W - M.r - ux), height: ph, fill: ink(0.07), 'pointer-events': 'none' }));
+      svg.appendChild(s('line', { x1: ux, x2: ux, y1: M.t, y2: M.t + ph, stroke: cssv('--critical'), 'stroke-width': 1.5, 'pointer-events': 'none' }));
+      svg.appendChild(s('text', { x: nearEdge ? ux - 6 : ux + 6, y: M.t + 12, 'text-anchor': nearEdge ? 'end' : 'start', fill: cssv('--t-critical'), 'font-size': 10.5, 'font-weight': 700, 'pointer-events': 'none' }, 'UNTRUSTED'));
+    }
+    const cross = s('line', { y1: M.t, y2: M.t + ph, stroke: ink(0.35), 'stroke-width': 1, display: 'none', 'pointer-events': 'none' });
+    const sel = s('rect', { y: M.t, height: ph, class: 'brush-sel', display: S.range ? '' : 'none', 'pointer-events': 'none' });
+    if (S.range) { sel.setAttribute('x', x(S.range[0])); sel.setAttribute('width', Math.max(2, x(S.range[1]) - x(S.range[0]))); }
+    svg.appendChild(cross); svg.appendChild(sel);
+    const hit = s('rect', { x: M.l, y: M.t, width: pw, height: ph, fill: 'transparent', style: { cursor: 'crosshair' } });
+    const tAt = ev => { const r = svg.getBoundingClientRect(); return Math.max(0, Math.min(DUR, ((ev.clientX - r.left - M.l) / pw) * DUR)); };
+    const near = (list, t, px) => list.filter(e => Math.abs(x(e.t) - x(t)) <= px);
+    const findingAt = ev => { const r = svg.getBoundingClientRect(), y = ev.clientY - r.top; return (FL && y < M.t + FL) ? near(fnd, tAt(ev), 9) : []; };
+    let drag = null;
+    hit.addEventListener('pointermove', ev => {
+      const t = tAt(ev), cx = x(t), r = svg.getBoundingClientRect(), y = ev.clientY - r.top;
+      cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('display', '');
+      if (drag !== null) { const a = Math.min(drag, t), z = Math.max(drag, t); sel.setAttribute('display', ''); sel.setAttribute('x', x(a)); sel.setAttribute('width', Math.max(2, x(z) - x(a))); }
+      const li = Math.floor((y - M.t - FL) / LH), kind = li >= 0 ? lanes[li] : null, rows = [];
+      if (FL && y < M.t + FL) for (const f of near(fnd, t, 9).slice(0, 4)) rows.push(h('div', { class: 'tk' }, h('span', { class: 'tv' }, f.severity.toUpperCase()), h('span', { class: 'tl' }, short(f.title, 70))));
+      else if (kind) { const hits = near(byKind[kind.id], t, 5); for (const e of hits.slice(0, 4)) rows.push(h('div', { class: 'tk' }, h('span', { class: 'tv num' }, fmtAt(e.t)), h('span', { class: 'tl' }, short(e.title, 70)))); if (hits.length > 4) rows.push(h('div', { class: 'tl' }, '+' + (hits.length - 4) + ' more here')); }
+      showTip(ev.clientX, ev.clientY, [h('div', { class: 'tl' }, fmtAt(t) + (kind ? ' · ' + kind.label : '')), ...rows]);
+    });
+    hit.addEventListener('pointerleave', () => { cross.setAttribute('display', 'none'); hideTip(); });
+    hit.addEventListener('pointerdown', ev => { hit.setPointerCapture(ev.pointerId); drag = tAt(ev); });
+    hit.addEventListener('pointerup', ev => {
+      const a = Math.min(drag, tAt(ev)), z = Math.max(drag, tAt(ev)); drag = null;
+      if (x(z) - x(a) > 4) setState({ range: [a, z] });
+      else { const f = findingAt(ev)[0]; if (f) setState({ sel: { type: 'finding', id: f.id } }); else if (S.range) setState({ range: null }); }   // a click on a finding's mark opens it
+    });
+    svg.appendChild(hit);
+    clear(holder).appendChild(svg);
+  }
+  wrap.redraw = draw;
+  new ResizeObserver(() => { if (wrap.isConnected && wrap.clientWidth) draw(); }).observe(wrap);
+  onState(() => { if (wrap.isConnected) draw(); });
+  requestAnimationFrame(draw);
+  return wrap;
+}
 function activityTable() {
   const b = bucketize(DATA.events, 24);
   const head = h('tr', null, h('th', { scope: 'col' }, 'Time window'), ...KINDS.map(k => h('th', { scope: 'col' }, k.label)));
@@ -109,7 +197,7 @@ function rankedBars(items, opts) {
   if (!items.length) return h('div', { class: 'emptystate compact' }, icon('info', 24), h('p', null, opts.empty || 'Nothing recorded'));
   for (const it of items) {
     const row = h('div', { class: 'bar-row' + (it.flag ? ' direct' : ''), role: 'listitem', tabindex: '0', onclick: it.onclick, onkeydown: ev => { if (ev.key === 'Enter' && it.onclick) it.onclick(); } },
-      h('div', { class: 'n', title: it.label }, it.flag ? h('span', { class: 'sev sev-medium', style: { marginRight: '6px' } }, 'DIRECT') : null, it.label),
+      h('div', { class: 'n', title: it.label + (it.sev ? ' (' + it.sev + ' finding)' : '') }, it.flag ? h('span', { class: 'sev sev-medium', style: { marginRight: '6px' } }, 'DIRECT') : null, it.sev ? h('span', { class: 'sev sev-' + it.sev, style: { marginRight: '6px', padding: '0 4px' }, title: it.sev + ' finding' }, icon(SEVICON[it.sev], 11)) : null, it.label),
       h('div', { class: 'bar-track' }, h('div', { class: 'bar-fill', style: { width: (100 * it.value / max) + '%' } })),
       h('div', { class: 'num muted' }, it.right ?? fmtN(it.value)));
     row.addEventListener('pointermove', ev => showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv num' }, it.right ?? fmtN(it.value)), h('div', { class: 'tt' }, it.label), it.sub ? h('div', { class: 'tl' }, it.sub) : null]));

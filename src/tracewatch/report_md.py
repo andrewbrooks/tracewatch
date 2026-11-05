@@ -7,6 +7,8 @@ from __future__ import annotations
 import re
 import time
 
+from .plural import pl
+
 SEV_MARK = {"high": "[HIGH]", "medium": "[MED] ", "low": "[LOW] ", "info": "[info]"}
 VERDICT_MARK = {
     "complete": "OK",
@@ -261,7 +263,7 @@ def render(m: dict) -> str:
     )
     if d["lookup_probes"]:
         o.append(
-            f"_{d['lookup_probes']} UDP connect() call(s) right after a lookup are address-selection probes (no traffic)._\n"
+            f"_{pl(d['lookup_probes'], 'UDP connect() call')} right after a lookup {'is an' if d['lookup_probes'] == 1 else 'are'} address-selection {'probe' if d['lookup_probes'] == 1 else 'probes'} (no traffic)._\n"
         )
 
     o.append("## Commands\n")
@@ -301,7 +303,7 @@ def render(m: dict) -> str:
     o.append("## Recording integrity\n")
     ig = m["integrity"]
     o.append(
-        f"Verdict **{txt(ig['verdict'])}**. Clock alignment: {txt(m['clock']['source'])} ({m['clock']['votes']} anchor(s)).\n"
+        f"Verdict **{txt(ig['verdict'])}**. Clock alignment: {txt(m['clock']['source'])} ({pl(m['clock']['votes'], 'anchor')}).\n"
     )
     for g in ig.get("gaps", []):
         o.append(f"- gap in **{txt(g['source'])}**: {txt(g['reason'])}")

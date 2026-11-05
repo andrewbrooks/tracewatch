@@ -59,7 +59,12 @@ class Session:
         self.load_s = time.time() - t0
 
     def tab(self, t):
-        self.page.click(f'.tab[data-tab="{t}"]')
+        loc = self.page.locator(f'.tab[data-tab="{t}"]')
+        if loc.is_visible():
+            loc.click()
+        else:  # phones show four tabs and a "More" menu
+            self.page.click(".tab.more")
+            self.page.click(f'.moretab[data-tab="{t}"]')
         self.page.wait_for_timeout(450)
 
     def rows(self):
@@ -107,7 +112,7 @@ def run_demo(b, demo_dir):
         )
     # --- process tree
     s.tab("tree")
-    shown = p.locator("#view-tree .toolbar .muted").inner_text()
+    shown = p.locator("#view-tree .toolbar .muted.num").inner_text()
     check(f"tree shows every process ({shown})", shown.startswith(f"{st['processes']} of {st['processes']}"))
     check("tree has one node per process", p.locator("g.node").count() == st["processes"])
     target = next(x for x in model["processes"] if x["depth"] == 2 and x["name"] == "cp")
@@ -129,7 +134,7 @@ def run_demo(b, demo_dir):
     check("Escape closes the drawer", p.locator("#drawer.open").count() == 0)
     p.click("button:has-text('Flagged paths only')")
     p.wait_for_timeout(300)
-    flagged = int(p.locator("#view-tree .toolbar .muted").inner_text().split()[0])
+    flagged = int(p.locator("#view-tree .toolbar .muted.num").inner_text().split()[0])
     want = len(
         {
             c.id if hasattr(c, "id") else c["id"]
@@ -174,13 +179,28 @@ def run_demo(b, demo_dir):
     # --- findings filter
     s.tab("findings")
     cards = p.locator("#view-findings .finding").count()
-    check(f"findings view shows every finding ({cards})", cards == len(model["findings"]))
-    p.click("#view-findings .lg:has(.sev-info)")
-    p.wait_for_timeout(250)
     non_info = sum(1 for f in model["findings"] if f["severity"] != "info")
+    check(f"INFO findings start collapsed: only high, medium and low are listed ({cards})", cards == non_info)
     check(
-        "turning 'info' off hides exactly the info findings", p.locator("#view-findings .finding").count() == non_info
+        "the severity filters say whether they are on (aria-pressed and a visible 'shown'/'hidden')",
+        p.locator("#view-findings .fchip[aria-pressed='false'] .fstate").first.inner_text().lower() == "hidden"
+        and p.locator("#view-findings .fchip[aria-pressed='true'] .fstate").first.inner_text().lower() == "shown",
     )
+    p.click("#view-findings .fchip:has(.sev-info)")
+    p.wait_for_timeout(250)
+    check(
+        "turning 'info' on lists every finding", p.locator("#view-findings .finding").count() == len(model["findings"])
+    )
+    check(
+        "each finding card carries its rule's dictionary entry",
+        p.locator("#view-findings .finding details.about-rule").count() == len(model["findings"]),
+    )
+    p.locator("#view-findings .finding details.about-rule summary").first.click()
+    check(
+        "'About this rule' opens in place and says what the rule cannot tell you",
+        "Cannot tell" in p.locator("#view-findings details.about-rule[open]").first.inner_text(),
+    )
+    p.click("#view-findings .fchip:has(.sev-info)")
     # --- time range brush on the overview chart
     s.tab("overview")
     box = p.locator("#view-overview svg.chart rect[fill='transparent']").bounding_box()
@@ -511,10 +531,10 @@ def run_keyboard(b, path):
     check("'?' opens the keyboard-shortcuts dialog", p.locator("#help.on").count() == 1)
     p.keyboard.press("Escape")
     check("Esc closes the dialog", p.locator("#help.on").count() == 0)
-    p.keyboard.press("2")
+    p.keyboard.press("3")
     p.wait_for_timeout(300)
     check(
-        "number keys switch views ('2' = process tree)",
+        "number keys switch views ('3' = process tree)",
         p.locator("#view-tree.on").count() == 1 and p.evaluate("document.title").startswith("Process tree"),
     )
     # tree keyboard navigation
@@ -588,9 +608,19 @@ def run_keyboard(b, path):
         p.locator(".view.on .tbl-row").count() > 3 and p.input_value("#search") == "",
     )
     # header actions
+    p.click(".copycmd")
+    p.wait_for_timeout(200)
+    check("the copy button copies the command and confirms with a toast", p.locator(".toast.on").count() == 1)
     p.click(".runcmd")
     p.wait_for_timeout(200)
-    check("clicking the command copies it and confirms with a toast", p.locator(".toast.on").count() == 1)
+    full = p.locator("#cmdfull.on")
+    check(
+        "clicking the command shows all of it, wrapped",
+        full.count() == 1
+        and len(full.inner_text()) >= len(p.evaluate("document.querySelector('.runcmd').textContent")) - 2,
+    )
+    p.keyboard.press("Escape")
+    check("Esc closes the full command", p.locator("#cmdfull.on").count() == 0)
     s.tab("overview")
     check("switching views resets the scroll position", p.evaluate("document.querySelector('#main').scrollTop") == 0)
     check("no console errors during the keyboard session", not s.errors, "; ".join(s.errors[:2]))
@@ -634,6 +664,10 @@ def run_print(b, path):
         p.locator("#view-http .tbl-row").count() > 0 and p.locator("#view-dns .tbl-row").count() > 0,
     )
     check("nothing overflows the page width", p.evaluate("document.documentElement.scrollWidth - innerWidth") <= 1)
+    check(
+        "findings print with their rule definitions expanded",
+        p.evaluate("[...document.querySelectorAll('details.about-rule')].every(d => d.open)"),
+    )
     check(
         "print colours are dark-on-light (text is not the dark theme's light grey)",
         p.evaluate("getComputedStyle(document.querySelector('#view-commands .tbl-row')).color").startswith("rgb(1"),
@@ -697,6 +731,103 @@ def run_story(b, path):
             over <= 1 and direction == ("column" if w <= 820 else "row"),
         )
         s.page.close()
+
+
+def run_design_feedback(b, path):
+    """The changes from the design review: nav order and groups, the page making room for the drawer, the phone More
+    menu, the at-a-glance summary, honest plurals, and the swim-lane activity chart."""
+    s = Session(b, path)
+    p = s.page
+    order = p.evaluate("[...document.querySelectorAll('#rail .tab[data-tab]')].map(t => t.dataset.tab)")
+    check(
+        f"Findings is second in the side bar, right under Overview ({order[:3]})", order[:2] == ["overview", "findings"]
+    )
+    check("the side bar has dividers between its groups", p.locator("#rail .tab-sep").count() == 4)
+    check(
+        "the active tab is highlighted neutrally (no red: red means HIGH)",
+        "255, 59, 71"
+        not in p.evaluate("getComputedStyle(document.querySelector('.tab[aria-selected=true]')).backgroundImage"),
+    )
+    check(
+        "the Findings badge explains itself",
+        "high and" in (p.locator(".tab[data-tab=findings]").get_attribute("title") or ""),
+    )
+    glance = p.locator("#view-overview .glance").inner_text()
+    check("the Overview leads with a plain-language summary", glance.startswith("Ran ") and "process" in glance)
+    check(
+        "no '(s)' plural shortcuts anywhere in the page text",
+        "(s)" not in p.evaluate("document.body.innerText") and "(es)" not in p.evaluate("document.body.innerText"),
+    )
+    link = p.locator("#view-overview .glance-link").first
+    if link.count():
+        link.click()
+        p.wait_for_timeout(500)
+        check("a high-severity link in the summary opens that finding", p.locator("#drawer.open").count() == 1)
+        p.keyboard.press("Escape")
+        p.wait_for_timeout(300)
+    check(
+        "the activity chart is swim lanes: a lane label per kind, no stacked bars",
+        p.locator("#view-overview svg.chart .lane-label").count() >= 3,
+    )
+    check("findings are marked along the top of the chart", p.locator("#view-overview svg.chart svg").count() >= 1)
+    # the drawer takes its space from the page instead of covering the table
+    s.tab("http")
+    before = p.evaluate("document.querySelector('#main').getBoundingClientRect().width")
+    p.locator(".view.on .tbl-row").first.click()
+    p.wait_for_timeout(600)
+    after = p.evaluate("document.querySelector('#main').getBoundingClientRect().width")
+    check(
+        f"an open drawer makes the page narrower instead of covering it ({before:.0f} -> {after:.0f} px)",
+        before - after > 400,
+    )
+    cols = p.evaluate(
+        "[...document.querySelectorAll('#view-http .tbl-head button')].map(b => b.textContent.trim().replace(/[ ▲▼]+$/, ''))"
+    )
+    check(
+        "Status stays visible beside the open drawer",
+        "Status" in cols
+        and p.evaluate(
+            "(() => { const h = [...document.querySelectorAll('#view-http .tbl-head button')].find(b => b.textContent.startsWith('Status')); return h.getBoundingClientRect().right <= document.querySelector('#drawer').getBoundingClientRect().left + 1; })()"
+        ),
+    )
+    p.keyboard.press("Escape")
+    s.tab("tree")
+    check(
+        "the process-tree toolbar carries the legend (nothing floats over the nodes)",
+        p.locator("#view-tree .toolbar .legend-inline").count() == 1
+        and p.locator("#view-tree .legend-float").count() == 0,
+    )
+    check(
+        "a failed exit is marked and a clean one recedes",
+        p.locator("#view-tree text.ex:not(.ok)").count() >= 1 and p.locator("#view-tree text.ex.ok").count() >= 1,
+    )
+    check("no console errors", not s.errors, "; ".join(s.errors[:2]))
+    s.page.close()
+    # phones: four tabs and a More menu
+    s = Session(b, path, width=390, height=844)
+    p = s.page
+    shown = p.evaluate(
+        "[...document.querySelectorAll('#rail .tab')].filter(t => getComputedStyle(t).display !== 'none').map(t => t.textContent.trim().replace(/[0-9]+$/, ''))"
+    )
+    check(f"phones show four tabs plus More ({shown})", len(shown) == 5 and shown[-1] == "More")
+    p.click(".tab.more")
+    p.wait_for_timeout(250)
+    check("More opens a panel with the other views", p.locator("#morepanel.on .moretab").count() == len(ALL_TABS) - 4)
+    p.click('#morepanel .moretab[data-tab="commands"]')
+    p.wait_for_timeout(500)
+    check(
+        "choosing a view from More opens it and closes the panel",
+        p.locator("#view-commands.on").count() == 1 and p.locator("#morepanel.on").count() == 0,
+    )
+    check(
+        "More shows as selected while a view it holds is open", p.get_attribute(".tab.more", "aria-selected") == "true"
+    )
+    clipped = p.evaluate(
+        "(() => { const b = document.querySelector('#view-overview .banner'); return [...b.querySelectorAll('p, li, button, h2')].filter(e => e.scrollWidth > e.clientWidth + 1 || e.getBoundingClientRect().right > b.getBoundingClientRect().right + 1).map(e => e.textContent.slice(0, 30)); })()"
+    )
+    check("the Overview summary wraps inside the banner on a phone (nothing clipped)", not clipped, str(clipped))
+    check("no console errors on the phone", not s.errors, "; ".join(s.errors[:2]))
+    s.page.close()
 
 
 def _chain(model, pid):
@@ -799,6 +930,7 @@ def main(demo_dir):
             run_responsive(b, OUT / "demo.html")
             run_print(b, OUT / "demo.html")
             run_story(b, OUT / "demo.html")
+            run_design_feedback(b, OUT / "demo.html")
         run_edges(b)
         run_hostile(b)
         run_big(b)

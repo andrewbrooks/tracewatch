@@ -9,12 +9,12 @@ function treeView() {
   world.appendChild(edgeG); world.appendChild(nodeG);
   const svg = s('svg', { role: 'tree', 'aria-label': 'Process tree. Select a process to see its command line, chain and activity.' }, s('defs', null, s('clipPath', { id: 'nclip' }, s('rect', { x: 0, y: 0, width: NW - 8, height: NH, rx: 8 }))), world);
   const canvas = h('div', { class: 'canvas' }, svg);
-  const legend = h('div', { class: 'legend-float' },
+  const legend = h('div', { class: 'legend-inline', 'aria-label': 'Severity colours' },
     h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, h('i', { class: 'kdot', style: { background: SEVC.high } }), 'high'),
     h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, h('i', { class: 'kdot', style: { background: SEVC.medium } }), 'medium'),
     h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, h('i', { class: 'kdot', style: { background: SEVC.low } }), 'low'),
-    h('span', { class: 'muted' }, 'left bar = most severe finding on that process · drag to pan · wheel to zoom'));
-  canvas.appendChild(legend);
+    h('span', { style: { display: 'inline-flex', gap: '6px', alignItems: 'center' } }, h('i', { class: 'kdot', style: { background: SEVC.info } }), 'info'),
+    h('span', { class: 'muted' }, 'left bar = most severe finding on that process'));
 
   const btn = (label, fn, pressed) => h('button', { class: 'btn', type: 'button', onclick: fn, 'aria-pressed': pressed === undefined ? undefined : String(pressed) }, label);
   const flagBtn = btn('Flagged paths only', () => { flaggedOnly = !flaggedOnly; flagBtn.setAttribute('aria-pressed', String(flaggedOnly)); render(true); }, false);
@@ -25,7 +25,7 @@ function treeView() {
     h('button', { class: 'btn', type: 'button', 'aria-label': 'Zoom in', onclick: () => zoomBy(1.25) }, '+'));
   const toolbar = h('div', { class: 'toolbar' },
     btn('Fit all', () => fit(true)), btn('Expand all', () => { collapsed.clear(); render(true); }),
-    btn('Collapse to depth 2', () => { collapsed.clear(); for (const p of DATA.processes) if (p.depth >= 1 && p.children.length) collapsed.add(p.id); render(true); }), flagBtn, info, zoomBox);
+    btn('Collapse to depth 2', () => { collapsed.clear(); for (const p of DATA.processes) if (p.depth >= 1 && p.children.length) collapsed.add(p.id); render(true); }), flagBtn, legend, info, zoomBox);
   const root = h('div', { class: 'view fill', id: 'view-tree' }, toolbar, canvas);
   if (!DATA.processes.length) canvas.appendChild(emptyState('tree', 'No processes were recorded', 'The target\'s exec was never seen by the kernel trace. If the command failed to start, check the Run tab for its exit status and the recorder\'s notes.'));
 
@@ -64,7 +64,7 @@ function treeView() {
   function exitTag(p) {
     if (!p.exit) return { t: 'no exit', c: cssv('--text-3') };
     if (p.exit.signal) return { t: p.exit.signal_name.replace('SIG', ''), c: cssv('--t-critical') };
-    return p.exit.code === 0 ? { t: 'exit 0', c: cssv('--text-3') } : { t: 'exit ' + p.exit.code, c: cssv('--t-serious') };
+    return p.exit.code === 0 ? { t: 'exit 0', c: cssv('--faint'), ok: true } : { t: '⚠ exit ' + p.exit.code, c: cssv('--t-serious') };
   }
   const nodeEls = new Map();
   const focusId = () => (S.sel && S.sel.type === 'proc' && pos.has(S.sel.id)) ? S.sel.id : ((DATA.processes.find(p => !p.parent && pos.has(p.id)) || {}).id || null);
@@ -102,9 +102,9 @@ function treeView() {
     for (const [id, n] of pos) {
       count++;
       for (const c of n.kids) {
-        const x1 = n.x + NW, y1 = n.y + NH / 2, x2 = c.x, y2 = c.y + NH / 2, mx = (x2 - x1) / 2;
+        const x1 = n.x + NW, y1 = n.y + NH / 2, x2 = c.x, y2 = c.y + NH / 2, xt = x1 + Math.min(20, (x2 - x1) / 2), r = Math.min(8, Math.abs(y2 - y1) / 2, (x2 - xt) / 2), dir = y2 >= y1 ? 1 : -1;
         const hl = sel && ((path.has(n.p.id) && path.has(c.p.id)) || (sub.has(n.p.id) && sub.has(c.p.id)));
-        edgeG.appendChild(s('path', { d: `M${x1},${y1}C${x1 + mx},${y1} ${x2 - mx},${y2} ${x2},${y2}`, class: 'edge' + (hl ? ' hl' : '') + (first ? ' draw' : ''), 'pointer-events': 'none' }));
+        edgeG.appendChild(s('path', { d: Math.abs(y2 - y1) < 1 ? `M${x1},${y1}H${x2}` : `M${x1},${y1}H${xt - r}Q${xt},${y1} ${xt},${y1 + dir * r}V${y2 - dir * r}Q${xt},${y2} ${xt + r},${y2}H${x2}`, class: 'edge' + (hl ? ' hl' : '') + (first ? ' draw' : ''), 'pointer-events': 'none' }));
       }
     }
     for (const [id, n] of pos) {
@@ -128,7 +128,7 @@ function treeView() {
         inner.appendChild(s('text', { class: 'cnt2', x: cx + 11, y: 53.5 }, String(c)));
         cx += 14 + String(c).length * 6.4 + 6;
       }
-      inner.appendChild(s('text', { class: 'ex', x: NW - 16, y: 53.5, 'text-anchor': 'end', fill: ex.c }, ex.t));
+      inner.appendChild(s('text', { class: 'ex' + (ex.ok ? ' ok' : ''), x: NW - 16, y: 53.5, 'text-anchor': 'end', fill: ex.c }, ex.t));
       g.appendChild(inner);
       if (p.children.length) {
         const cg = s('g', { transform: `translate(${NW - 8},${NH / 2})`, onclick: ev => { ev.stopPropagation(); collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); render(); }, role: 'button', 'aria-label': collapsed.has(id) ? 'Expand children' : 'Collapse children' });

@@ -22,6 +22,7 @@ from .findings import find
 from .findings_catalog import CATALOG
 from .integrity import assess
 from .join import join_records, load
+from .plural import pl
 
 SCHEMA = 1
 STAGING = ("/tmp/", "/var/tmp/", "/dev/shm/")
@@ -512,7 +513,8 @@ def build(run_dir: Path | str) -> dict:
 
     if ca_loads:
         notes.append(
-            f"{ca_loads} open(s) of the recorder's own CA bundle (loaded by TLS clients) are hidden from the file list."
+            f"{pl(ca_loads, 'open')} of the recorder's own CA bundle (loaded by TLS clients) "
+            f"{'is' if ca_loads == 1 else 'are'} hidden from the file list."
         )
     if manifest.get("file_watch"):
         notes.append(

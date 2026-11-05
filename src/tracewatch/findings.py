@@ -10,6 +10,7 @@ import os
 import re
 
 from .findings_catalog import CATALOG
+from .plural import pl
 
 SEV_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3}
 PER_RULE_CAP = 25  # a rule firing hundreds of times (bash -c) is summarised, not listed 500 times
@@ -217,7 +218,7 @@ def find(model: dict) -> list[dict]:
             "This process opened a TCP connection that did not go through the recorder's proxy (it ignored the proxy "
             "settings, or NO_PROXY matched). The kernel trace shows the connection; its content was NOT recorded.",
             evid[:50],
-            detail=f"{u['count']} connection(s)",
+            detail=pl(u["count"], "connection"),
         )
     for r in model["integrity"].get("tls_rejected", []):
         add(
@@ -229,7 +230,7 @@ def find(model: dict) -> list[dict]:
             "the per-run CA). It still reached the network through the proxy, but its requests and responses were "
             "NOT recorded.",
             [h["event"] for h in model["http"] if h["event"] and h.get("tls_refused") and h["host"] == r["host"]][:50],
-            detail=f"{r['count']} connection(s)" + (f": {r['error']}" if r.get("error") else ""),
+            detail=pl(r["count"], "connection") + (f": {r['error']}" if r.get("error") else ""),
         )
     per_host_cred: dict[str, list[str]] = {}
     for h in model["http"]:
@@ -284,7 +285,7 @@ def find(model: dict) -> list[dict]:
             "credentials-in-requests",
             "info",
             "exposure",
-            f"Credentials seen in {len(evs)} request(s) to {host}",
+            f"Credentials seen in {pl(len(evs), 'request')} to {host}",
             "Requests carried secrets (redacted in this recording). Over TLS this is normal for authenticated APIs.",
             evs[:50],
         )
@@ -438,7 +439,7 @@ def find(model: dict) -> list[dict]:
             "nonzero-exit",
             "info",
             "reliability",
-            f"{len(bad_exit)} process(es) exited with a non-zero status",
+            f"{pl(len(bad_exit), 'process', 'processes')} exited with a non-zero status",
             "A non-zero exit usually means the command failed (grep with no match also exits 1).",
             [e["id"] for e in bad_exit[:50]],
             detail=", ".join(f"{name_of(e['proc'])}={e['detail']['code']}" for e in bad_exit[:20]),
@@ -478,7 +479,7 @@ def find(model: dict) -> list[dict]:
             "secrets-redacted",
             "info",
             "exposure",
-            f"{total} secret value(s) were redacted from this recording",
+            f"{pl(total, 'secret value')} {'was' if total == 1 else 'were'} redacted from this recording",
             "Credentials, tokens and passwords seen in traffic or command lines were replaced by keyed tags before "
             "anything was written.",
             [],

@@ -1,6 +1,7 @@
 /* ===== virtualised, sortable table. rows() is re-evaluated on refresh() so filters always apply. ===== */
 const PRINT_ROWS = 4000;
 function vtable(cfg) {
+  cfg = { ...cfg, cols: cfg.cols.filter(c => !(cfg.dropCols || []).includes(c.key)) };
   const ROWH = matchMedia('(pointer: coarse)').matches ? Math.max(cfg.rowHeight || 32, 40) : (cfg.rowHeight || 32);
   let sortKey = cfg.defaultSort || null, sortDir = cfg.defaultDir || 1, data = [], raf = 0;
   const grid = cfg.cols.map(c => c.w || '1fr').join(' ');

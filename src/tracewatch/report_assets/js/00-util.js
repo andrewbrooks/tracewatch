@@ -94,6 +94,7 @@ const groupOf = e => GROUP[e.kind] || 'exec';
 const SEV = { high: { label: 'High', css: '--critical', rank: 3 }, medium: { label: 'Medium', css: '--serious', rank: 2 },
   low: { label: 'Low', css: '--warning', rank: 1 }, info: { label: 'Info', css: '--sev-info', rank: 0 } };
 const SEVC = {};
+const plural = (n, one, many) => fmtN(n) + ' ' + (n === 1 ? one : (many || one + 's'));
 function readColors() { for (const k of KINDS) KC[k.id] = cssv(k.css); for (const [k, v] of Object.entries(SEV)) SEVC[k] = cssv(v.css); }
 const ink = a => 'rgba(' + cssv('--ink-rgb') + ',' + a + ')';   // translucent wash that adapts to the theme
 
@@ -143,7 +144,7 @@ const ICONS = {
   sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
   moon: 'M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z',
   auto: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 3v18M12 3a9 9 0 0 1 0 18',
-  check: 'M5 12.5l4.5 4.5L19 7.5',
+  check: 'M5 12.5l4.5 4.5L19 7.5', copy: 'M9 9h11v11H9zM5 15V4h11', more: 'M5 12h.01M12 12h.01M19 12h.01',
   warn: 'M12 3l10 18H2zM12 10v5M12 18h.01',
   x: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9 9l6 6M15 9l-6 6',
   info: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 11v5M12 8h.01',

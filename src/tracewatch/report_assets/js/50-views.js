@@ -11,6 +11,12 @@ function overviewView() {
   const [vcss, vicon, vlabel] = verdictOf(), st = DATA.stats, fc = st.findings, direct = DATA.destinations.filter(d => d.via === 'direct' && !d.loopback);
   const banner = h('div', { class: 'card banner', style: { '--vc': 'var(' + vcss + ')', '--vct': 'var(' + vcss.replace('--', '--t-') + ')' } }, h('div', { class: 'vi' }, icon(vicon, 38)),
     h('div', null, h('h2', null, vlabel), h('div', { class: 'muted' }, 'Run ' + DATA.run.id + ' · ' + fmtWall(DATA.run.started_wall_ns) + ' · ' + fmtT(DATA.run.duration_ns) + ' · target ' + ((DATA.run.root_exit || {}).status || 'exit not recorded')),
+      (() => {   // lead with the answer: what did this do, and is it worth a closer look?
+        const hi = DATA.findings.filter(f => f.severity === 'high'), bits = [plural(st.processes, 'process', 'processes'), 'contacted ' + plural(st.destinations, 'destination') + (direct.length ? ' (' + direct.length + ' bypassed the proxy)' : ''), 'made ' + plural(st.http, 'HTTP request'), 'touched ' + plural(st.files, 'watched file')];
+        const sent = 'Ran ' + bits[0] + ', ' + bits.slice(1).join(', ') + '. ' + (hi.length ? plural(hi.length, 'high-severity finding') + (fc.medium ? ' and ' + fmtN(fc.medium) + ' medium' : '') + '.' : (fc.medium ? 'No high-severity findings; ' + fmtN(fc.medium) + ' medium.' : 'No high or medium findings.'));
+        return h('div', { class: 'glance' }, h('p', null, isEmptyRun() ? 'Nothing was recorded.' : sent),
+          hi.length ? h('ul', { class: 'glance-list' }, hi.slice(0, 3).map(f => h('li', null, h('button', { type: 'button', class: 'glance-link', onclick: () => setState({ sel: { type: 'finding', id: f.id } }) }, icon('x', 13), short(f.title, 110)))), hi.length > 3 ? h('li', null, h('button', { type: 'button', class: 'glance-link more', onclick: () => setState({ tab: 'findings' }) }, '+' + (hi.length - 3) + ' more high-severity findings')) : null) : null);
+      })(),
       (() => {
         const lines = [...DATA.run.reasons];
         if (isEmptyRun()) lines.unshift('The recorder saw no process or network activity. If the command failed to start, its exit status is the place to look.');
@@ -19,20 +25,20 @@ function overviewView() {
       })()));
   const tile = (label, value, sub, glow, go) => h('div', { class: 'card kpi', style: { '--glow': glow, cursor: go ? 'pointer' : 'default' }, onclick: go, role: go ? 'button' : undefined, tabindex: go ? '0' : undefined, onkeydown: go ? (ev => { if (ev.key === 'Enter') go(); }) : undefined }, h('div', { class: 'l' }, label), h('div', { class: 'v num' }, value), h('div', { class: 's' }, sub));
   const tab = t => () => setState({ tab: t });
-  const sevPips = ['high', 'medium', 'low', 'info'].filter(k => fc[k]).map(k => h('span', { class: 'sev sev-' + k }, icon(SEVICON[k], 11), String(fc[k])));
+  const sevPips = ['high', 'medium', 'low'].filter(k => fc[k]).map(k => h('span', { class: 'sev sev-' + k }, icon(SEVICON[k], 11), String(fc[k])));
   const kpis = h('div', { class: 'kpis' },
-    tile('Findings', fmtN(DATA.findings.length), sevPips.length ? sevPips : 'none fired', 'rgba(208,59,59,.16)', tab('findings')),
-    tile('Processes', fmtN(st.processes), 'depth ' + st.max_depth + ' · ' + fmtN(st.commands) + ' commands', 'rgba(57,135,229,.16)', tab('tree')),
+    tile('Findings', fmtN(DATA.findings.length), sevPips.length ? [...sevPips.slice(0, 3), fc.info ? h('span', { class: 'muted' }, '+' + fmtN(fc.info) + ' info') : null] : 'none fired', 'rgba(208,59,59,.16)', tab('findings')),
+    tile('Processes', fmtN(st.processes), 'depth ' + st.max_depth + ' · ' + plural(st.commands, 'command'), 'rgba(57,135,229,.16)', tab('tree')),
     tile('Destinations', fmtN(st.destinations), direct.length ? h('span', { class: 'sev sev-medium' }, icon('warn', 11), direct.length + ' direct') : (st.destinations ? 'all via proxy' : 'none recorded'), 'rgba(25,158,112,.16)', tab('network')),
-    tile('HTTP requests', fmtN(st.http), (DATA.http.filter(x => x.error || (x.status || 0) >= 400).length) + ' errors · ' + st.websockets + ' websockets', 'rgba(217,89,38,.16)', tab('http')),
-    tile('DNS names', fmtN(st.dns_names), DATA.dns.resolver_contacts.length + ' resolver contacts', 'rgba(213,81,129,.16)', tab('dns')),
+    tile('HTTP requests', fmtN(st.http), plural(DATA.http.filter(x => x.error || (x.status || 0) >= 400).length, 'error') + ' · ' + plural(st.websockets, 'websocket'), 'rgba(217,89,38,.16)', tab('http')),
+    tile('DNS names', fmtN(st.dns_names), plural(DATA.dns.resolver_contacts.length, 'resolver contact'), 'rgba(213,81,129,.16)', tab('dns')),
     tile('Watched files', fmtN(st.files), 'credential & temp paths', 'rgba(201,133,0,.16)', tab('files')));
-  const activity = chartCard('Activity over time', () => activityChart({ height: 210, buckets: 64 }), activityTable, { count: fmtN(st.events) + ' events', cls: 'span2' });
+  const activity = chartCard('Activity over time', () => activityLanes(), activityTable, { count: fmtN(st.events) + ' events', cls: 'span2' });
   const dests = DATA.destinations.map((d, i) => ({ d, i })).sort((a, b) => (b.d.via === 'direct') - (a.d.via === 'direct') || b.d.requests - a.d.requests).slice(0, 8)
     .map(({ d, i }) => ({ label: (d.name || d.ip) + ':' + d.port, value: d.requests, sub: d.via === 'direct' ? 'direct: content not recorded' : fmtB(d.bytes_in) + ' received', flag: d.via === 'direct' && !d.loopback, onclick: () => setState({ sel: { type: 'dest', id: i } }) }));
   const destCard = chartCard('Top destinations', () => rankedBars(dests, { empty: 'No network activity recorded' }), () => rankedTable(dests, ['Destination', 'Requests']), { count: fmtN(DATA.destinations.length) });
   const busy = DATA.processes.map(p => ({ p, n: (evByProc.get(p.id) || []).filter(e => e.kind !== 'exit' && !(e.kind === 'udp' && e.detail.probe)).length })).filter(x => x.n).sort((a, b) => b.n - a.n).slice(0, 8)
-    .map(({ p, n }) => ({ label: p.name + ' · ' + p.pid, value: n, sub: short(oneLine(p.cmdline), 120), onclick: () => setState({ sel: { type: 'proc', id: p.id } }) }));
+    .map(({ p, n }) => ({ label: p.name + ' · ' + p.pid, value: n, sev: ['high', 'medium', 'low'].find(k => p.severity === k) || null, sub: short(oneLine(p.cmdline), 120), onclick: () => setState({ sel: { type: 'proc', id: p.id } }) }));
   const busyCard = chartCard('Busiest processes', () => rankedBars(busy), () => rankedTable(busy, ['Process', 'Events']), { count: 'by events' });
   const cov = h('section', { class: 'card' }, h('div', { class: 'card-h' }, h('h3', null, 'Recording coverage'), h('span', { class: 'sp' }), h('button', { class: 'btn', type: 'button', onclick: tab('run') }, 'Integrity details')), h('div', { class: 'card-b' }, coverageStrip(), h('div', { class: 'muted', style: { marginTop: '8px' } }, (DATA.integrity.gaps || []).length ? 'Hatched bands are periods a component was not recording.' : 'Every recorder component was running for the whole run.')));
   const top = DATA.findings.filter(f => f.severity !== 'info').slice(0, 4);
@@ -77,25 +83,26 @@ function networkView() {
 function httpView() {
   const f = { method: '', klass: '', ws: false };
   const methods = [...new Set(DATA.http.map(x => x.method))].sort();
+  const oneHost = DATA.http.length > 1 && new Set(DATA.http.map(x => x.host)).size === 1;   // a column that never varies is noise: say it once
   const t = vtable({
-    label: 'HTTP requests', empty: 'No HTTP requests recorded', minWidth: '980px',
-    cols: [
+    label: 'HTTP requests', empty: 'No HTTP requests recorded', minWidth: '780px',
+    cols: [   // ordered by importance: what happened (status, time) stays visible when the drawer narrows the table; path and size give way first
       { key: 't', label: 'At', w: '82px', cls: 'num', render: x => fmtAt(x.t), sort: x => x.t },
-      { key: 'proc', label: 'Process', w: 'minmax(120px,.9fr)', render: x => x.proc ? procLink(x.proc) : h('span', { class: 'muted' }, 'unattributed'), sort: x => x.proc || '' },
       { key: 'm', label: 'Method', w: '74px', render: x => h('span', { class: 'pill' }, x.method), sort: x => x.method },
-      { key: 'host', label: 'Host', w: 'minmax(140px,1fr)', cls: 'mono cell', render: x => x.host, sort: x => x.host },
-      { key: 'path', label: 'Path', w: 'minmax(180px,1.6fr)', cls: 'mono cell', render: x => (x.scheme === 'http' ? '⚠ http ' : '') + x.path, sort: x => x.path },
       { key: 's', label: 'Status', w: '96px', render: x => statusPill(x), sort: x => x.status ?? 0 },
-      { key: 'size', label: 'Size', w: '80px', cls: 'num', render: x => fmtB((x.resp_body || {}).size), sort: x => (x.resp_body || {}).size || 0 },
       { key: 'd', label: 'Time', w: '78px', cls: 'num', render: x => x.duration_ms !== null && x.duration_ms !== undefined ? x.duration_ms + ' ms' : '—', sort: x => x.duration_ms ?? -1 },
+      { key: 'proc', label: 'Process', w: 'minmax(110px,.8fr)', render: x => x.proc ? procLink(x.proc) : h('span', { class: 'muted' }, 'unattributed'), sort: x => x.proc || '' },
+      { key: 'host', label: 'Host', w: 'minmax(110px,.8fr)', cls: 'mono cell', render: x => x.host, sort: x => x.host },
+      { key: 'path', label: 'Path', w: 'minmax(160px,1.6fr)', cls: 'mono cell', render: x => (x.scheme === 'http' ? '⚠ http ' : '') + x.path, sort: x => x.path },
+      { key: 'size', label: 'Size', w: '80px', cls: 'num', render: x => fmtB((x.resp_body || {}).size), sort: x => (x.resp_body || {}).size || 0 },
     ],
-    defaultSort: 't', defaultDir: 1,
+    defaultSort: 't', defaultDir: 1, dropCols: oneHost ? ['host'] : [],
     rows: () => DATA.http.filter(x => inRange(x.t) && (!f.method || x.method === f.method) && (!f.ws || x.websocket) && (!f.klass || (f.klass === 'err' ? (x.error || (x.status || 0) >= 400) : Math.floor((x.status || 0) / 100) === +f.klass)) && qmatch(x.host, x.path, x.method, x.status, x.error, x.proc ? pLabel(x.proc) : '')),
     onSelect: x => setState({ sel: { type: 'http', id: x.id } }), isSelected: x => S.sel && S.sel.type === 'http' && S.sel.id === x.id,
   });
   const tools = toolsRow(selectBox('Method', [['', 'All methods'], ...methods.map(m => [m, m])], v => { f.method = v; t.refresh(); }), selectBox('Status', [['', 'All statuses'], ['2', '2xx success'], ['3', '3xx redirect'], ['4', '4xx client error'], ['5', '5xx server error'], ['err', 'Errors (4xx, 5xx, failed)']], v => { f.klass = v; t.refresh(); }),
     h('button', { class: 'btn', type: 'button', 'aria-pressed': 'false', onclick: ev => { f.ws = !f.ws; ev.currentTarget.setAttribute('aria-pressed', String(f.ws)); t.refresh(); } }, 'WebSockets only'), t.count);
-  const root = h('div', { class: 'view col', id: 'view-http' }, h('h2', { class: 'vt' }, 'HTTP requests'), h('p', { class: 'vsub' }, 'Decrypted requests and responses seen by the proxy, attributed to the process that made them. Secrets are redacted before they are written. Click a row for headers, bodies, timing and TLS.'), tools, t.el);
+  const root = h('div', { class: 'view col', id: 'view-http' }, h('h2', { class: 'vt' }, 'HTTP requests'), h('p', { class: 'vsub' }, 'Decrypted requests and responses seen by the proxy, attributed to the process that made them. Secrets are redacted before they are written. Click a row for headers, bodies, timing and TLS.' + (oneHost ? ' Every request went to ' + DATA.http[0].host + '.' : '')), tools, t.el);
   root.onShow = () => t.refresh(); onState(() => { if (root.classList.contains('on')) t.refresh(); });
   return root;
 }
@@ -178,13 +185,13 @@ function ruleReference() {   // the whole finding dictionary, with how many time
       h('p', { style: { margin: '4px 0', color: 'var(--text-2)' } }, c.meaning), h('p', { class: 'muted', style: { margin: '2px 0' } }, 'Cannot tell: ' + c.cannot_know), h('p', { class: 'muted', style: { margin: '2px 0' } }, 'Often benign: ' + c.benign.join('; ')), h('p', { class: 'muted', style: { margin: '2px 0 0' } }, 'Check: ' + c.check)); }));
 }
 function findingsView() {
-  const f = { sev: new Set(['high', 'medium', 'low', 'info']) }, list = h('div', null);
+  const f = { sev: new Set(['high', 'medium', 'low']) }, list = h('div', null);   // INFO starts collapsed: seven of nineteen is noise that pushes the real issues down
   const chips = h('div', { class: 'legend' });
   const draw = () => {
-    clear(chips); for (const k of ['high', 'medium', 'low', 'info']) { const n = DATA.findings.filter(x => x.severity === k).length; chips.appendChild(h('button', { class: 'lg', type: 'button', 'aria-pressed': String(f.sev.has(k)), onclick: () => { f.sev.has(k) ? f.sev.delete(k) : f.sev.add(k); draw(); } }, sevPill(k), h('span', { class: 'c num' }, String(n)))); }
+    clear(chips); for (const k of ['high', 'medium', 'low', 'info']) { const n = DATA.findings.filter(x => x.severity === k).length; chips.appendChild(h('button', { class: 'fchip', type: 'button', 'aria-pressed': String(f.sev.has(k)), title: (f.sev.has(k) ? 'Hide ' : 'Show ') + k + ' findings', onclick: () => { f.sev.has(k) ? f.sev.delete(k) : f.sev.add(k); draw(); } }, sevPill(k), h('span', { class: 'c num' }, String(n)), h('span', { class: 'fstate' }, f.sev.has(k) ? 'shown' : 'hidden'))); }
     clear(list); const shown = DATA.findings.filter(x => f.sev.has(x.severity) && qmatch(x.title, x.why, x.rule, x.category, x.detail));
     if (!shown.length) list.appendChild(h('div', { class: 'empty' }, DATA.findings.length ? 'No findings match the filters.' : 'No indicators fired for this run.'));
-    for (const x of shown) list.appendChild(h('div', { style: { cursor: 'pointer' }, onclick: ev => { if (!ev.target.closest('button,.ev-item')) setState({ sel: { type: 'finding', id: x.id } }); } }, findingCard(x)));
+    for (const x of shown) list.appendChild(h('div', { style: { cursor: 'pointer' }, onclick: ev => { if (!ev.target.closest('button,.ev-item,details')) setState({ sel: { type: 'finding', id: x.id } }); } }, findingCard(x)));
   };
   const root = viewShell('findings', 'Findings', 'Indicators derived from what was recorded. Each one cites its evidence. They are for a human to judge: a rule firing means "look here", not "this is malicious".', chips, h('div', { style: { height: '10px' } }), list, ruleReference());
   root.onShow = draw; onState(() => { if (root.classList.contains('on')) draw(); });

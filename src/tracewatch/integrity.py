@@ -24,6 +24,7 @@ import json
 from collections import defaultdict
 from pathlib import Path
 
+from .plural import pl
 from .procinfo import same_process
 
 HEARTBEAT_S = 2.0
@@ -178,7 +179,8 @@ def assess(run_dir: Path) -> dict:
     if out["unproxied"]:
         n = sum(r["count"] for r in out["unproxied"])
         losses.append(
-            f"{n} connection(s) to {len(out['unproxied'])} destination(s) bypassed the proxy: content not recorded"
+            f"{pl(n, 'connection')} to {pl(len(out['unproxied']), 'destination')} "
+            "bypassed the proxy: content not recorded"
         )
     rejected: dict[str, dict] = {}
     for r in flow_recs:
@@ -189,7 +191,7 @@ def assess(run_dir: Path) -> dict:
     if out["tls_rejected"]:
         n = sum(r["count"] for r in out["tls_rejected"])
         losses.append(
-            f"{n} connection(s) to {len(rejected)} host(s): the client refused the recorder's certificate "
+            f"{pl(n, 'connection')} to {pl(len(rejected), 'host')}: the client refused the recorder's certificate "
             "(certificate pinning, or it does not trust the CA): content not recorded"
         )
     if m.get("proxy_env", {}).get("inherited_no_proxy"):
