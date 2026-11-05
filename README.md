@@ -8,6 +8,11 @@ It started as a way to play with [Tracee](https://github.com/aquasecurity/tracee
 Claude. It is a toy-sized "flight recorder", not a security product: nothing here has been hardened,
 audited, or tested beyond the scenarios in this repository.
 
+## Live demo
+
+Interactive example reports (real output from example runs, with paths, names and IP addresses replaced):
+**https://andrewbrooks.github.io/tracewatch/**. The simulated-intruder report is the best place to start.
+
 ## Screenshots
 
 From the scripted demo workload (`tests/fixtures/demo.sh`). Machine-specific paths, user and host names and IP
@@ -107,6 +112,13 @@ uv sync
 Integration tests (`tests/integration/*.sh`) record real processes and need Docker and the Tracee image.
 The browser tests (`tests/browser/run.py`, Playwright; `TW_BROWSER=firefox` for Firefox) check the interactive
 report's behavior, accessibility basics, and the security properties of the embedded data.
+
+## Documentation
+
+- [How it works](docs/HOW_IT_WORKS.md): recording, reconstruction, rendering, testing
+- [Limitations](docs/LIMITATIONS.md): what it cannot see or get right
+- [Findings reference](docs/FINDINGS.md): what every rule means, what it cannot tell you, and its evidence
+- [Security notes](SECURITY.md): the privileged container, what recordings contain, the simulated intruder
 
 ## Status
 

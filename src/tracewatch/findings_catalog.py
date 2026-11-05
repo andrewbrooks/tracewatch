@@ -302,3 +302,45 @@ rule(
 )
 
 CATALOG = _R
+
+
+def render_markdown() -> str:
+    """docs/FINDINGS.md, generated from the catalog (tools/gen_findings_doc.py writes it; a test keeps it current)."""
+    status = {"observed": "observed on a real recording", "synthetic": "synthetic only (tested on fabricated events)"}
+    out = [
+        "# Findings reference",
+        "",
+        "<!-- generated from src/tracewatch/findings_catalog.py by tools/gen_findings_doc.py: do not edit by hand -->",
+        "",
+        "Every finding is an **indicator for a human to judge**, not a verdict. Each rule cites the events that triggered it.",
+        "Severities are the author's rough estimates, not measurements. The evidence status says whether the rule has ever",
+        "fired on a real recording made with this project (**observed**) or has only been tested on fabricated events",
+        "(**synthetic only**).",
+        "",
+        "| Rule | Category | Default severity | Evidence |",
+        "|---|---|---|---|",
+    ]
+    rules = sorted(CATALOG.values(), key=lambda r: (r["category"], r["id"]))
+    for r in rules:
+        out.append(
+            f"| [`{r['id']}`](#{r['id']}) | {r['category']} | {r['severity']} | {status[r['status']].split(' (')[0]} |"
+        )
+    for r in rules:
+        out += [
+            "",
+            f"## {r['id']}",
+            "",
+            f"**{r['title']}** · {r['category']} · default severity {r['severity']} · {status[r['status']]}",
+            "",
+            r["meaning"],
+            "",
+            f"**It cannot tell you:** {r['cannot_know']}",
+            "",
+            "**Often benign when:**",
+            "",
+        ]
+        out += [f"- {b}" for b in r["benign"]]
+        out += ["", f"**How to check:** {r['check']}"]
+        if r.get("note"):
+            out += ["", f"*Evidence note:* {r['note']}"]
+    return "\n".join(out) + "\n"
