@@ -5,7 +5,7 @@ happened into a report you can read, click around in, or diff against another ru
 
 It started as a way to play with [Tracee](https://github.com/aquasecurity/tracee) (eBPF process tracing) and
 [mitmproxy](https://mitmproxy.org/), and to see how far a coding assistant could take that. It was built together with
-Claude (Claude Code). It is a toy-sized "flight recorder", not a security product: nothing here has been hardened,
+Claude. It is a toy-sized "flight recorder", not a security product: nothing here has been hardened,
 audited, or tested beyond the scenarios in this repository.
 
 ## Screenshots
