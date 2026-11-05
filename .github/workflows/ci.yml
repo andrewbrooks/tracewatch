@@ -14,8 +14,8 @@ jobs:
   checks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
@@ -28,8 +28,8 @@ jobs:
       matrix:
         browser: [chromium, firefox]
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
       - run: uv sync --locked
       - run: uv run playwright install --with-deps ${{ matrix.browser }}
       # Without a demo recording the suite runs its synthetic-data checks only (edge cases, hostile data, big report).
