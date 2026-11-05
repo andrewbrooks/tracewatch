@@ -6,7 +6,7 @@ const countBy = (arr, f) => { const m = new Map(); for (const x of arr) { const 
 
 function overviewView() {
   const [vcss, vicon, vlabel] = verdictOf(), st = DATA.stats, fc = st.findings, direct = DATA.destinations.filter(d => d.via === 'direct' && !d.loopback);
-  const banner = h('div', { class: 'card banner', style: { '--vc': 'var(' + vcss + ')' } }, h('div', { class: 'vi' }, icon(vicon, 38)),
+  const banner = h('div', { class: 'card banner', style: { '--vc': 'var(' + vcss + ')', '--vct': 'var(' + vcss.replace('--', '--t-') + ')' } }, h('div', { class: 'vi' }, icon(vicon, 38)),
     h('div', null, h('h2', null, vlabel), h('div', { class: 'muted' }, 'Run ' + DATA.run.id + ' · ' + fmtWall(DATA.run.started_wall_ns) + ' · ' + fmtT(DATA.run.duration_ns) + ' · target ' + ((DATA.run.root_exit || {}).status || 'exit not recorded')),
       DATA.run.reasons.length ? h('ul', null, DATA.run.reasons.map(r => h('li', null, r))) : null));
   const tile = (label, value, sub, glow, go) => h('div', { class: 'card kpi', style: { '--glow': glow, cursor: go ? 'pointer' : 'default' }, onclick: go, role: go ? 'button' : undefined, tabindex: go ? '0' : undefined, onkeydown: go ? (ev => { if (ev.key === 'Enter') go(); }) : undefined }, h('div', { class: 'l' }, label), h('div', { class: 'v num' }, value), h('div', { class: 's' }, sub));

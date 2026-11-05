@@ -61,7 +61,7 @@ function activityChart(opts) {
       });
     }
     // hover layer: crosshair band + tooltip listing every kind at that bucket
-    const band = s('rect', { y: M.t, height: ph, width: bw, fill: 'rgba(255,255,255,.06)', display: 'none', 'pointer-events': 'none' });
+    const band = s('rect', { y: M.t, height: ph, width: bw, fill: ink(0.06), display: 'none', 'pointer-events': 'none' });
     const sel = s('rect', { y: M.t, height: ph, class: 'brush-sel', display: S.range ? '' : 'none', 'pointer-events': 'none' });
     if (S.range) { sel.setAttribute('x', x(S.range[0])); sel.setAttribute('width', Math.max(2, x(S.range[1]) - x(S.range[0]))); }
     svg.appendChild(band); svg.appendChild(sel);

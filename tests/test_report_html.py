@@ -126,3 +126,40 @@ def test_cli_writes_a_private_file(tmp_path, capsys):
     assert main(["report", str(run), "-o", str(out)]) == 0
     assert out.stat().st_mode & 0o777 == 0o600 and out.read_text().startswith("<!DOCTYPE html>")
     assert main(["report", str(tmp_path / "nope")]) == 2
+
+
+# ---------------------------------------------------------------------------------------------- themes
+def _token_block(css: str, selector: str) -> dict[str, str]:
+    i = css.index(selector + " {")
+    body = css[i : css.index("}", i)]
+    return dict(re.findall(r"(--[a-z0-9-]+):\s*([^;]+);", body))
+
+
+THEME_NEUTRAL = {  # tokens that deliberately do not change with the theme
+    "--good", "--warning", "--serious", "--critical",  # status MARK colours are fixed by the palette rules
+    "--sev-low", "--sev-medium", "--sev-high", "--font", "--mono", "--radius", "--rail", "--top",
+}  # fmt: skip
+
+
+def test_light_theme_overrides_every_theme_dependent_token():
+    css, _ = report_html.read_assets()
+    dark, light = _token_block(css, ":root"), _token_block(css, ':root[data-theme="light"]')
+    missing = set(dark) - set(light) - THEME_NEUTRAL
+    assert not missing, f"tokens defined for dark but not overridden for light: {sorted(missing)}"
+    assert set(light) - set(dark) == set(), "light defines tokens that dark does not"
+
+
+def test_no_dark_only_literals_outside_the_token_blocks():
+    """Regression guard: a literal white wash or dark hex outside the tokens would be invisible/wrong in light."""
+    css, js = report_html.read_assets()
+    rest = css[css.index(':root[data-theme="light"]') :]
+    rest = rest[rest.index("}") + 1 :]  # everything after the light token block
+    assert "rgba(255,255,255" not in rest and "rgba(0,0,0" not in rest
+    assert "rgba(255,255,255" not in js
+    assert not re.search(r"#(?:0[0-9a-f]){2}[0-9a-f]{2}\b", rest)  # no near-black hex literals
+
+
+def test_theme_is_resolved_before_the_app_renders_and_is_controllable():
+    _, js = report_html.read_assets()
+    assert "applyTheme();" in js and "prefers-color-scheme: light" in js and "localStorage" in js and "'tw-theme'" in js
+    assert "color-scheme" in report_html.TEMPLATE

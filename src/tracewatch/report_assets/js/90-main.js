@@ -4,11 +4,25 @@ const TABS = [
   ['network', 'Network', 'network', networkView], ['http', 'HTTP', 'http', httpView], ['dns', 'DNS', 'dns', dnsView], ['commands', 'Commands', 'commands', commandsView],
   ['files', 'Files', 'files', filesView], ['events', 'Events', 'events', eventsView], ['findings', 'Findings', 'findings', findingsView], ['run', 'Run', 'run', runView],
 ];
-function logo() {
-  return s('svg', { viewBox: '0 0 32 32', width: 30, height: 30, 'aria-hidden': 'true' },
-    s('circle', { cx: 16, cy: 16, r: 13, fill: 'none', stroke: cssv('--brand'), 'stroke-width': 1.6, opacity: 0.35 }), s('circle', { cx: 16, cy: 16, r: 8.5, fill: 'none', stroke: cssv('--brand'), 'stroke-width': 1.6, opacity: 0.65 }),
-    s('path', { d: 'M16 16 L27 9', stroke: cssv('--brand'), 'stroke-width': 2, 'stroke-linecap': 'round' }), s('circle', { cx: 16, cy: 16, r: 2.6, fill: cssv('--brand') }), s('circle', { cx: 24, cy: 19, r: 1.8, fill: '#fff' }));
+function logo() {   // brand parts use currentColor (.brand { color: var(--brand) }) so the logo follows the theme
+  return s('svg', { viewBox: '0 0 32 32', width: 30, height: 30, 'aria-hidden': 'true', style: { color: 'var(--brand)' } },
+    s('circle', { cx: 16, cy: 16, r: 13, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, opacity: 0.35 }), s('circle', { cx: 16, cy: 16, r: 8.5, fill: 'none', stroke: 'currentColor', 'stroke-width': 1.6, opacity: 0.65 }),
+    s('path', { d: 'M16 16 L27 9', stroke: 'currentColor', 'stroke-width': 2, 'stroke-linecap': 'round' }), s('circle', { cx: 16, cy: 16, r: 2.6, fill: 'currentColor' }), s('circle', { cx: 24, cy: 19, r: 1.8, style: { fill: 'var(--text)' } }));
 }
+function cycleTheme() {
+  themePref = { auto: 'light', light: 'dark', dark: 'auto' }[themePref];
+  try { localStorage.setItem(THEME_KEY, themePref); } catch (e) { /* storage blocked: the choice lasts for this page only */ }
+  applyTheme(); paintThemeBtn(); setState({});
+}
+const themeBtn = h('button', { class: 'iconbtn', id: 'themebtn', type: 'button', onclick: cycleTheme });
+function paintThemeBtn() {
+  const next = { auto: 'light', light: 'dark', dark: 'auto' }[themePref];
+  clear(themeBtn).appendChild(icon(themePref === 'light' ? 'sun' : themePref === 'dark' ? 'moon' : 'auto', 17));
+  themeBtn.setAttribute('aria-label', `Theme: ${themePref}. Switch to ${next}.`);
+  themeBtn.title = themePref === 'auto' ? 'Theme: follows your system. Click for light.' : `Theme: ${themePref}. Click for ${next}.`;
+}
+lightMQ.addEventListener('change', () => { if (themePref === 'auto') { applyTheme(); setState({}); } });
+
 function buildShell() {
   const app = h('div', { id: 'app' });
   const [vcss, vicon, vlabel] = verdictOf();
@@ -19,7 +33,8 @@ function buildShell() {
     h('div', { class: 'brand' }, logo()),
     h('div', { class: 'wordmark' }, 'TRACEWATCH', h('small', null, 'PROCESS FLIGHT RECORDER')),
     h('div', { class: 'runline' }, h('div', { class: 'runcmd', title: DATA.run.cmdline }, h('b', null, '$'), oneLine(DATA.run.cmdline)), h('span', { class: 'chip num' }, fmtT(DATA.run.duration_ns)), h('span', { class: 'chip' }, DATA.run.id)),
-    h('span', { class: 'verdict v-' + DATA.run.verdict, title: (DATA.run.reasons || []).join('; ') || vlabel }, icon(vicon, 15), vlabel.toUpperCase()), search);
+    h('span', { class: 'verdict v-' + DATA.run.verdict, title: (DATA.run.reasons || []).join('; ') || vlabel }, icon(vicon, 15), vlabel.toUpperCase()), search, themeBtn);
+  paintThemeBtn();
   const rail = h('nav', { id: 'rail', role: 'tablist', 'aria-label': 'Report sections' });
   const main = h('main', { id: 'main' });
   const views = {};

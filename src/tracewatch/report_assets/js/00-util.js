@@ -82,12 +82,23 @@ const KINDS = [
 ];
 const rootStyle = getComputedStyle(document.documentElement);
 const cssv = n => rootStyle.getPropertyValue(n).trim();
-const KC = {}; for (const k of KINDS) KC[k.id] = cssv(k.css);
+const KC = {};
 const GROUP = { exec: 'exec', exit: 'exec', tcp: 'net', udp: 'net', unix: 'net', http: 'http', ws: 'ws', dns: 'dns', file: 'file' };
 const groupOf = e => GROUP[e.kind] || 'exec';
 const SEV = { high: { label: 'High', css: '--critical', rank: 3 }, medium: { label: 'Medium', css: '--serious', rank: 2 },
   low: { label: 'Low', css: '--warning', rank: 1 }, info: { label: 'Info', css: '--sev-info', rank: 0 } };
-const SEVC = {}; for (const [k, v] of Object.entries(SEV)) SEVC[k] = cssv(v.css);
+const SEVC = {};
+function readColors() { for (const k of KINDS) KC[k.id] = cssv(k.css); for (const [k, v] of Object.entries(SEV)) SEVC[k] = cssv(v.css); }
+const ink = a => 'rgba(' + cssv('--ink-rgb') + ',' + a + ')';   // translucent wash that adapts to the theme
+
+/* ---------- theme: auto follows the OS, light/dark override and persist ---------- */
+const THEME_KEY = 'tw-theme';
+let themePref = 'auto';
+try { themePref = localStorage.getItem(THEME_KEY) || 'auto'; } catch (e) { /* file:// storage can be blocked */ }
+if (!['auto', 'light', 'dark'].includes(themePref)) themePref = 'auto';
+const lightMQ = matchMedia('(prefers-color-scheme: light)');
+function applyTheme() { document.documentElement.dataset.theme = themePref === 'auto' ? (lightMQ.matches ? 'light' : 'dark') : themePref; readColors(); }
+applyTheme();
 
 function shapePath(shape, x, y, r) {
   switch (shape) {
@@ -120,6 +131,9 @@ const ICONS = {
   search: 'M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4',
   download: 'M12 4v11M7 11l5 5 5-5M5 20h14',
   close: 'M6 6l12 12M18 6L6 18',
+  sun: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zM12 2v2M12 20v2M2 12h2M20 12h2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4',
+  moon: 'M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z',
+  auto: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 3v18M12 3a9 9 0 0 1 0 18',
   check: 'M5 12.5l4.5 4.5L19 7.5',
   warn: 'M12 3l10 18H2zM12 10v5M12 18h.01',
   x: 'M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM9 9l6 6M15 9l-6 6',

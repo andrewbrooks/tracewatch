@@ -54,8 +54,8 @@ function treeView() {
   }
   function exitTag(p) {
     if (!p.exit) return { t: 'no exit', c: cssv('--text-3') };
-    if (p.exit.signal) return { t: p.exit.signal_name.replace('SIG', ''), c: SEVC.high };
-    return p.exit.code === 0 ? { t: 'exit 0', c: cssv('--text-3') } : { t: 'exit ' + p.exit.code, c: SEVC.medium };
+    if (p.exit.signal) return { t: p.exit.signal_name.replace('SIG', ''), c: cssv('--t-critical') };
+    return p.exit.code === 0 ? { t: 'exit 0', c: cssv('--text-3') } : { t: 'exit ' + p.exit.code, c: cssv('--t-serious') };
   }
   function render(refit) {
     const b = layout(), m = matches(), sel = S.sel && S.sel.type === 'proc' ? S.sel.id : null;
@@ -78,7 +78,8 @@ function treeView() {
       const inner = s('g', { 'clip-path': 'url(#nclip)' });
       if (sevc) inner.appendChild(s('rect', { x: 0, y: 0, width: 4, height: NH, fill: sevc }));
       inner.appendChild(s('path', { d: ICONS.commands, transform: 'translate(12,9) scale(.6)', fill: 'none', stroke: p.forked ? cssv('--faint') : cssv('--text-2'), 'stroke-width': 2, 'stroke-linecap': 'round', 'stroke-linejoin': 'round' }));
-      inner.appendChild(s('text', { class: 'nm', x: 33, y: 20 }, short(p.name, 22), p.forked ? s('tspan', { class: 'pidt', dx: 6 }, 'fork') : null));
+      inner.appendChild(s('text', { class: 'nm', x: 33, y: 20 }, short(p.name, p.severity ? 15 : 22), p.forked ? s('tspan', { class: 'pidt', dx: 6 }, 'fork') : null));
+      if (p.severity && p.severity !== 'info') inner.appendChild(s('text', { class: 'sevt', x: NW - 22 - String(p.pid).length * 6.4, y: 19, 'text-anchor': 'end', fill: cssv('--t-' + ({ high: 'critical', medium: 'serious', low: 'warning' })[p.severity]) }, p.severity === 'medium' ? 'MED' : p.severity.toUpperCase()));
       inner.appendChild(s('text', { class: 'pidt', x: NW - 16, y: 19, 'text-anchor': 'end' }, String(p.pid)));
       const argsOnly = p.argv && p.argv.length > 1 ? p.argv.slice(1).join(' ') : '';
       inner.appendChild(s('text', { class: 'cm', x: 14, y: 36 }, short(oneLine('$ ' + (argsOnly || p.cmdline)), 33)));

@@ -1,6 +1,7 @@
 """Open a report in headless Chromium, collect console/page errors, screenshot every tab.
 usage: capture.py REPORT.html OUT_DIR [tab ...]     (set LD_LIBRARY_PATH if Chromium libs are missing)"""
 
+import os
 import sys
 from pathlib import Path
 
@@ -15,7 +16,7 @@ def main(report: str, outdir: str, tabs: list[str]) -> int:
     errors: list[str] = []
     with sync_playwright() as p:
         b = p.chromium.launch()
-        pg = b.new_page(viewport={"width": 1500, "height": 920})
+        pg = b.new_page(viewport={"width": 1500, "height": 920}, color_scheme=os.environ.get("THEME", "dark"))
         pg.on(
             "console",
             lambda m: errors.append(f"console.{m.type}: {m.text}") if m.type in ("error", "warning") else None,

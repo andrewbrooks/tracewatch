@@ -246,6 +246,159 @@ def run_demo(b, demo_dir):
     s.page.close()
 
 
+def _lum(hexcol):
+    h = hexcol.strip().lstrip("#")
+    r, g, b = (int(h[i : i + 2], 16) / 255 for i in (0, 2, 4))
+    f = lambda c: c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4  # noqa: E731
+    return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b)
+
+
+def _contrast(a, b):
+    la, lb = sorted((_lum(a), _lum(b)), reverse=True)
+    return (la + 0.05) / (lb + 0.05)
+
+
+TOKENS = [
+    "--page",
+    "--surface",
+    "--raised",
+    "--raised-2",
+    "--text",
+    "--text-2",
+    "--text-3",
+    "--t-good",
+    "--t-warning",
+    "--t-serious",
+    "--t-critical",
+    "--k-exec",
+    "--k-http",
+    "--k-net",
+    "--k-file",
+    "--k-dns",
+    "--k-ws",
+    "--k-sys",
+    "--critical",
+    "--serious",
+    "--warning",
+    "--good",
+]
+# categorical marks below 3:1 on the LIGHT surface: the skill's documented exceptions (relief = marker shapes, labelled
+# legend, table view). Anything else below 3:1 is a regression.
+LIGHT_MARK_EXCEPTIONS = {"--k-net", "--k-file", "--k-dns"}
+
+
+def run_themes(b, path):
+    for scheme in ("dark", "light"):
+        pg = b.new_page(viewport={"width": 1400, "height": 900}, color_scheme=scheme)
+        errs = []
+        pg.on("console", lambda m, errs=errs: errs.append(m.text) if m.type in ("error", "warning") else None)
+        pg.on("pageerror", lambda e, errs=errs: errs.append(str(e)))
+        pg.goto(Path(path).resolve().as_uri())
+        pg.wait_for_function("window.__tw_ready === true")
+        check(
+            f"[{scheme}] 'auto' follows the system preference",
+            pg.evaluate("document.documentElement.dataset.theme") == scheme,
+        )
+        tok = pg.evaluate(
+            "t => Object.fromEntries(t.map(k => [k, getComputedStyle(document.documentElement).getPropertyValue(k).trim()]))",
+            TOKENS,
+        )
+        bad = [
+            (t, s_, round(_contrast(tok[t], tok[s_]), 2))
+            for t in ("--text", "--text-2", "--text-3")
+            for s_ in ("--page", "--surface", "--raised", "--raised-2")
+            if _contrast(tok[t], tok[s_]) < 4.5
+        ]
+        check(f"[{scheme}] body, secondary and muted text clear 4.5:1 on every surface", not bad, str(bad))
+        bad = [
+            (t, round(_contrast(tok[t], tok["--surface"]), 2))
+            for t in ("--t-good", "--t-warning", "--t-serious", "--t-critical")
+            if _contrast(tok[t], tok["--surface"]) < 4.5
+        ]
+        check(f"[{scheme}] status TEXT colours clear 4.5:1 on the surface", not bad, str(bad))
+        low = {
+            t
+            for t in ("--k-exec", "--k-http", "--k-net", "--k-file", "--k-dns", "--k-ws", "--k-sys")
+            if _contrast(tok[t], tok["--surface"]) < 3
+        }
+        expected = LIGHT_MARK_EXCEPTIONS if scheme == "light" else set()
+        check(
+            f"[{scheme}] categorical marks clear 3:1 except exactly the documented light-mode set ({sorted(low)})",
+            low == expected,
+            str(sorted(low ^ expected)),
+        )
+        bg = pg.evaluate("getComputedStyle(document.body).backgroundColor")
+        lum = sum(int(x) for x in bg[bg.index("(") + 1 : bg.index(")")].split(",")[:3]) / 3
+        check(
+            f"[{scheme}] the page background really is {scheme} ({bg})", (lum < 60) if scheme == "dark" else (lum > 200)
+        )
+        for t in (
+            "overview",
+            "tree",
+            "timeline",
+            "network",
+            "http",
+            "dns",
+            "commands",
+            "files",
+            "events",
+            "findings",
+            "run",
+        ):
+            pg.click(f'.tab[data-tab="{t}"]')
+            pg.wait_for_timeout(250)
+        check(f"[{scheme}] all 11 views render without console errors", not errs, "; ".join(errs[:2]))
+        pg.close()
+    # ---- manual override, persistence, and re-colouring
+    pg = b.new_page(viewport={"width": 1400, "height": 900}, color_scheme="dark")
+    pg.goto(Path(path).resolve().as_uri())
+    pg.wait_for_function("window.__tw_ready === true")
+    pg.click('.tab[data-tab="overview"]')
+    pg.wait_for_timeout(400)
+    fill_dark = pg.evaluate("document.querySelector('#view-overview svg.chart path[fill]').getAttribute('fill')")
+    pg.click("#themebtn")  # auto -> light
+    pg.wait_for_timeout(400)
+    fill_light = pg.evaluate("document.querySelector('#view-overview svg.chart path[fill]').getAttribute('fill')")
+    check(
+        "the toggle switches auto -> light even though the system is dark",
+        pg.evaluate("document.documentElement.dataset.theme") == "light",
+    )
+    check(f"charts are re-coloured live for the new theme ({fill_dark} -> {fill_light})", fill_dark != fill_light)
+    pg.click("#themebtn")  # light -> dark
+    check(
+        "the toggle then goes to dark",
+        pg.evaluate("document.documentElement.dataset.theme") == "dark"
+        and "dark" in pg.get_attribute("#themebtn", "aria-label").lower(),
+    )
+    pg.click("#themebtn")  # dark -> auto
+    check(
+        "and back to auto",
+        pg.evaluate("document.documentElement.dataset.theme") == "dark"
+        and "auto" in pg.get_attribute("#themebtn", "aria-label").lower().replace("theme: auto", "auto"),
+    )
+    pg.click("#themebtn")  # auto -> light again, then reload: the choice persists
+    stored = pg.evaluate(
+        "(() => { try { return localStorage.getItem('tw-theme'); } catch (e) { return 'blocked'; } })()"
+    )
+    pg.reload()
+    pg.wait_for_function("window.__tw_ready === true")
+    if stored == "blocked":
+        skip("theme persistence", "localStorage is blocked for file:// in this browser")
+    else:
+        check(
+            "the chosen theme persists across a reload",
+            pg.evaluate("document.documentElement.dataset.theme") == "light" and stored == "light",
+        )
+    pg.emulate_media(color_scheme="dark")
+    pg.wait_for_timeout(200)
+    check(
+        "an explicit choice is not overridden by a later system change",
+        pg.evaluate("document.documentElement.dataset.theme") == "light",
+    )
+    pg.screenshot(path=str(OUT / "theme_light_override.png"))
+    pg.close()
+
+
 def _chain(model, pid):
     by = {p["id"]: p for p in model["processes"]}
     out, cur = [], by.get(pid)
@@ -336,6 +489,8 @@ def main(demo_dir):
             run_demo(b, demo_dir)
         else:
             skip("demo-run checks", f"{demo_dir} not found (record it with tests/fixtures/demo.sh)")
+        if Path(demo_dir, "manifest.json").exists():
+            run_themes(b, OUT / "demo.html")
         run_hostile(b)
         run_big(b)
         b.close()

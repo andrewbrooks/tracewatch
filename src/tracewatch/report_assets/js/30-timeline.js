@@ -58,7 +58,7 @@ function timelineView() {
         const a = Math.max(xOf(p.start), LABEL_W), z = p.end === null ? W - PAD_R : Math.min(xOf(p.end), W - PAD_R);
         if (z > LABEL_W && a < W - PAD_R && xOf(p.start) < W) {
           const tint = p.exit && p.exit.signal ? SEVC.high : p.exit && p.exit.code ? SEVC.medium : null;
-          g.appendChild(s('rect', { x: a, y: cy - 3, width: Math.max(2, z - a), height: 6, rx: 3, fill: tint || 'rgba(255,255,255,.16)', opacity: tint ? 0.85 : 1, stroke: p.end === null ? cssv('--text-3') : 'none', 'stroke-dasharray': p.end === null ? '3 3' : null }));
+          g.appendChild(s('rect', { x: a, y: cy - 3, width: Math.max(2, z - a), height: 6, rx: 3, fill: tint || ink(0.16), opacity: tint ? 0.85 : 1, stroke: p.end === null ? cssv('--text-3') : 'none', 'stroke-dasharray': p.end === null ? '3 3' : null }));
         }
       }
       for (const e of r.evs) {
