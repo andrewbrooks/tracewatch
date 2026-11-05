@@ -116,7 +116,7 @@ def run_demo(b, demo_dir):
     check(f"tree shows every process ({shown})", shown.startswith(f"{st['processes']} of {st['processes']}"))
     check("tree has one node per process", p.locator("g.node").count() == st["processes"])
     target = next(x for x in model["processes"] if x["depth"] == 2 and x["name"] == "cp")
-    p.locator(f'g.node[aria-label^="cp pid {target["pid"]}"]').dispatch_event("click")
+    p.locator(f'g.node[aria-description*="Process cp, pid {target["pid"]}"]').dispatch_event("click")
     p.wait_for_timeout(500)
     check(
         "selecting a node opens the drawer with the exact command line",
@@ -538,19 +538,17 @@ def run_keyboard(b, path):
         p.locator("#view-tree.on").count() == 1 and p.evaluate("document.title").startswith("Process tree"),
     )
     # tree keyboard navigation
-    rootid = p.evaluate("document.querySelector('g.node[tabindex=\"0\"]').getAttribute('aria-label')")
+    rootid = p.evaluate("document.querySelector('g.node[tabindex=\"0\"]').getAttribute('data-fk')")
     check(
         f"the tree has ONE tab stop, not one per process ({rootid.split(',')[0]})",
         p.locator("g.node[tabindex='0']").count() == 1 and p.locator("g.node[tabindex='-1']").count() >= 5,
     )
     p.locator("g.node[tabindex='0']").focus()
     p.keyboard.press("ArrowRight")
-    moved = p.evaluate("document.activeElement.getAttribute('aria-label')")
+    moved = p.evaluate("document.activeElement.getAttribute('data-fk')")
     check("ArrowRight moves from the root to its first child", moved is not None and moved != rootid)
     p.keyboard.press("ArrowLeft")
-    check(
-        "ArrowLeft moves back to the parent", p.evaluate("document.activeElement.getAttribute('aria-label')") == rootid
-    )
+    check("ArrowLeft moves back to the parent", p.evaluate("document.activeElement.getAttribute('data-fk')") == rootid)
     p.keyboard.press("ArrowRight")
     p.keyboard.press("Enter")
     p.wait_for_timeout(400)
@@ -590,7 +588,7 @@ def run_keyboard(b, path):
     check(
         "the sorted column header exposes aria-sort",
         p.locator(
-            ".view.on .tbl-head button[aria-sort='ascending'], .view.on .tbl-head button[aria-sort='descending']"
+            ".view.on .tbl-head [role=columnheader][aria-sort='ascending'], .view.on .tbl-head [role=columnheader][aria-sort='descending']"
         ).count()
         == 1,
     )
@@ -834,7 +832,7 @@ def run_design_feedback(b, path):
     check(
         "the active tab is highlighted neutrally (no red: red means HIGH)",
         "255, 59, 71"
-        not in p.evaluate("getComputedStyle(document.querySelector('.tab[aria-selected=true]')).backgroundImage"),
+        not in p.evaluate("getComputedStyle(document.querySelector('.tab[aria-current=page]')).backgroundImage"),
     )
     check(
         "the Findings badge explains itself",
@@ -908,13 +906,58 @@ def run_design_feedback(b, path):
         p.locator("#view-commands.on").count() == 1 and p.locator("#morepanel.on").count() == 0,
     )
     check(
-        "More shows as selected while a view it holds is open", p.get_attribute(".tab.more", "aria-selected") == "true"
+        "More shows as selected while a view it holds is open", p.get_attribute(".tab.more", "aria-current") == "true"
     )
     clipped = p.evaluate(
         "(() => { const b = document.querySelector('#view-overview .banner'); return [...b.querySelectorAll('p, li, button, h2')].filter(e => e.scrollWidth > e.clientWidth + 1 || e.getBoundingClientRect().right > b.getBoundingClientRect().right + 1).map(e => e.textContent.slice(0, 30)); })()"
     )
     check("the Overview summary wraps inside the banner on a phone (nothing clipped)", not clipped, str(clipped))
     check("no console errors on the phone", not s.errors, "; ".join(s.errors[:2]))
+    s.page.close()
+
+
+def run_a11y_structure(b, path):
+    """Structural accessibility checks that automated tools (axe-core) flagged once; kept so they stay fixed."""
+    s = Session(b, path)
+    p = s.page
+    check("the page has exactly one level-one heading", p.locator("h1").count() == 1)
+    check(
+        "the side bar is a real navigation landmark",
+        p.locator("nav[aria-label] #rail").count() == 1,
+    )
+    check(
+        "no ARIA role is put on a button that is not allowed there (column headers are cells)",
+        p.locator("button[role=columnheader]").count() == 0
+        and p.locator(".tbl-head [role=columnheader] button").count() >= 1,
+    )
+    s.tab("findings")
+    check(
+        "finding cards use a heading one level below the view's heading",
+        p.locator("#view-findings .finding h3").count() >= 1 and p.locator("#view-findings .finding h4").count() == 0,
+    )
+    name = p.get_attribute('.tab[data-tab="findings"]', "aria-label") or ""
+    badge = p.locator('.tab[data-tab="findings"] .badge').inner_text()
+    check(
+        f"a tab's accessible name starts with its visible text, count included ({name[:40]!r})",
+        name.startswith("Findings " + badge),
+    )
+    s.tab("tree")
+    node = p.locator("g.node").first
+    check(
+        "a tree node is named by its visible text (no aria-label to disagree with it) and described in full",
+        node.get_attribute("aria-label") is None and "pid" in (node.get_attribute("aria-description") or ""),
+    )
+    s.tab("timeline")
+    check(
+        "the scrolling timeline can be reached with the keyboard",
+        p.locator("#view-timeline .tl[tabindex='0']").count() == 1,
+    )
+    ratio = p.evaluate("""(() => {
+      const b = document.querySelector('.tab[data-tab=findings] .badge'); if (!b) return 99;
+      const lum = c => { const [r, g, bl] = c.match(/[0-9.]+/g).slice(0, 3).map(Number).map(v => v / 255).map(v => v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4); return 0.2126 * r + 0.7152 * g + 0.0722 * bl; };
+      const cs = getComputedStyle(b), a = lum(cs.color), d = lum(cs.backgroundColor); return (Math.max(a, d) + 0.05) / (Math.min(a, d) + 0.05); })()""")
+    check(f"the Findings badge meets 4.5:1 text contrast ({ratio:.2f})", ratio >= 4.5)
+    check("no console errors", not s.errors, "; ".join(s.errors[:2]))
     s.page.close()
 
 
@@ -1019,6 +1062,7 @@ def main(demo_dir):
             run_print(b, OUT / "demo.html")
             run_story(b, OUT / "demo.html")
             run_zoom(b, OUT / "demo.html")
+            run_a11y_structure(b, OUT / "demo.html")
             run_design_feedback(b, OUT / "demo.html")
         run_edges(b)
         run_hostile(b)

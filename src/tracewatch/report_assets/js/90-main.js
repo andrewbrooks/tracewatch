@@ -66,27 +66,29 @@ function buildShell() {
   let timer = 0;
   search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => setState({ q: search.value.trim() }), 110); });
   const top = h('header', { id: 'top' },
+    h('h1', { class: 'sr' }, 'tracewatch report: ' + short(oneLine(DATA.run.cmdline), 70)),
     h('div', { class: 'brand' }, logo()),
     h('div', { class: 'wordmark' }, 'TRACEWATCH', h('small', null, 'PROCESS FLIGHT RECORDER')),
     h('div', { class: 'runline' }, h('div', { class: 'runcmd', role: 'button', tabindex: '0', 'aria-expanded': 'false', title: 'Click to see the whole command', onclick: () => toggleCmd(), onkeydown: ev => { if (ev.key === 'Enter') { ev.preventDefault(); toggleCmd(); } } }, h('b', null, '$'), oneLine(DATA.run.cmdline)), h('button', { class: 'iconbtn copycmd', type: 'button', 'aria-label': 'Copy the command', title: 'Copy the command', onclick: () => copyText(DATA.run.cmdline, 'Command') }, icon('copy', 15)), h('span', { class: 'chip num' }, fmtT(DATA.run.duration_ns)), h('span', { class: 'chip' }, DATA.run.id)),
     h('button', { class: 'verdict ' + verdictClass(), type: 'button', title: ((DATA.run.reasons || []).join('; ') || vlabel) + ' (open the integrity details)', onclick: () => setState({ tab: 'run' }) }, icon(vicon, 15), vlabel.toUpperCase()), search, themeBtn, h('button', { class: 'iconbtn', type: 'button', 'aria-label': 'Keyboard shortcuts', title: 'Keyboard shortcuts (?)', onclick: () => toggleHelp() }, '?'));
   paintThemeBtn();
-  const rail = h('nav', { id: 'rail', role: 'tablist', 'aria-label': 'Report sections' });
+  const rail = h('div', { id: 'rail' });   // the landmark is the <nav> around it: these are links between views, not a tab widget
+  const railNav = h('nav', { 'aria-label': 'Report sections', style: { display: 'contents' } }, rail);   // a real navigation landmark; the tab list inside keeps its own role
   const main = h('main', { id: 'main', tabindex: '-1' });
   const views = {};
   const high = DATA.findings.filter(f => f.severity === 'high').length, med = DATA.findings.filter(f => f.severity === 'medium').length;
   const direct = DATA.destinations.filter(d => d.via === 'direct' && !d.loopback).length;
   for (const [id, label, ic, make] of TABS) {
-    const badge = id === 'findings' && (high + med) ? h('span', { class: 'badge', style: { background: high ? SEVC.high : SEVC.medium } }, String(high + med))
+    const badge = id === 'findings' && (high + med) ? h('span', { class: 'badge', style: { background: high ? SEVC.high : SEVC.medium, color: high ? '#ffffff' : '' } }, String(high + med))
       : id === 'network' && direct ? h('span', { class: 'badge', style: { background: SEVC.medium } }, String(direct)) : null;
     const why = id === 'findings' && (high + med) ? high + ' high and ' + med + ' medium findings (' + DATA.findings.length + ' in all, including low and info)' : id === 'network' && direct ? plural(direct, 'destination') + ' reached without the proxy' : '';
-    rail.appendChild(h('button', { class: 'tab' + (NAV_PRIMARY.has(id) ? '' : ' secondary'), role: 'tab', type: 'button', 'data-tab': id, 'aria-selected': 'false', 'aria-controls': 'view-' + id, title: why || undefined, 'aria-label': why ? label + ': ' + why : undefined, onclick: () => setState({ tab: id }) }, icon(ic, 21), label, badge));
+    rail.appendChild(h('button', { class: 'tab' + (NAV_PRIMARY.has(id) ? '' : ' secondary'), type: 'button', 'data-tab': id, title: why || undefined, 'aria-label': why ? label + ' ' + (id === 'findings' ? high + med : direct) + ': ' + why : undefined, onclick: () => setState({ tab: id }) }, icon(ic, 21), label, badge ? ' ' : null, badge));
     if (NAV_GROUP_END.has(id)) rail.appendChild(h('div', { class: 'tab-sep', 'aria-hidden': 'true' }));
     const v = make(); views[id] = v; main.appendChild(v);
   }
   rail.appendChild(h('button', { class: 'tab more', type: 'button', 'aria-haspopup': 'true', 'aria-expanded': 'false', onclick: () => toggleMore() }, icon('more', 21), 'More'));
-  document.body.appendChild(h('div', { id: 'morepanel', class: 'morepanel', role: 'group', 'aria-label': 'More sections' }, ...TABS.filter(t => !NAV_PRIMARY.has(t[0])).map(([id, label, ic]) => h('button', { class: 'moretab', type: 'button', 'data-tab': id, 'aria-selected': 'false', onclick: () => { toggleMore(false); setState({ tab: id }); } }, icon(ic, 18), label))));
-  add(app, [top, rail, main]);
+  document.body.appendChild(h('div', { id: 'morepanel', class: 'morepanel', role: 'group', 'aria-label': 'More sections' }, ...TABS.filter(t => !NAV_PRIMARY.has(t[0])).map(([id, label, ic]) => h('button', { class: 'moretab', type: 'button', 'data-tab': id, onclick: () => { toggleMore(false); setState({ tab: id }); } }, icon(ic, 18), label))));
+  add(app, [top, railNav, main]);
   document.body.appendChild(h('a', { class: 'skip', href: '#main', onclick: ev => { ev.preventDefault(); main.focus(); } }, 'Skip to content'));
   document.body.appendChild(app); document.body.appendChild(drawerEl); document.body.appendChild(tipEl); document.body.appendChild(toastEl); document.body.appendChild(helpModal());
   return { views, search };
@@ -103,8 +105,8 @@ function init() {
   fromHash();
   let shown = null;
   const sync = () => {
-    $$('.tab[data-tab], .moretab').forEach(t => t.setAttribute('aria-selected', String(t.dataset.tab === S.tab)));
-    { const mb = $('.tab.more'); if (mb) mb.setAttribute('aria-selected', String(!NAV_PRIMARY.has(S.tab))); }
+    $$('.tab[data-tab], .moretab').forEach(t => { if (t.dataset.tab === S.tab) t.setAttribute('aria-current', 'page'); else t.removeAttribute('aria-current'); });
+    { const mb = $('.tab.more'); if (mb) { if (!NAV_PRIMARY.has(S.tab)) mb.setAttribute('aria-current', 'true'); else mb.removeAttribute('aria-current'); } }
     if (shown !== S.tab) {
       for (const [id, v] of Object.entries(views)) v.classList.toggle('on', id === S.tab); shown = S.tab; const v = views[S.tab];
       $('#main').scrollTop = 0; document.title = (TABS.find(t => t[0] === S.tab) || [0, ''])[1] + ' · ' + short(oneLine(DATA.run.cmdline), 60) + ' · tracewatch';

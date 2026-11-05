@@ -7,22 +7,23 @@ function vtable(cfg) {
   const grid = cfg.cols.map(c => c.w || '1fr').join(' ');
   const head = h('div', { class: 'tbl-head', style: { gridTemplateColumns: grid, minWidth: cfg.minWidth || '0' }, role: 'row' });
   const body = h('div', { class: 'tbl-body', role: 'rowgroup' });
-  const empty = h('div', { style: { display: 'none' } });
+  const emptyCell = h('div', { role: 'cell' });
+  const empty = h('div', { role: 'row', style: { display: 'none' } }, emptyCell);   // an empty table still needs a row to be a valid table
   const wrap = h('div', { class: 'tbl-wrap', style: { flex: '1', minHeight: '160px', maxHeight: cfg.maxHeight || 'none' }, role: 'table', 'aria-label': cfg.label || 'table' }, head, body, empty);
   const count = h('span', { class: 'muted num' });
   for (const c of cfg.cols) {
-    head.appendChild(h('button', { type: 'button', role: 'columnheader', title: c.sort ? 'Sort by ' + c.label : c.label, onclick: () => { if (!c.sort) return; if (sortKey === c.key) sortDir = -sortDir; else { sortKey = c.key; sortDir = 1; } refresh(); } }, c.label + (sortKey === c.key ? (sortDir > 0 ? ' ▲' : ' ▼') : '')));
+    head.appendChild(h('div', { class: 'th', role: 'columnheader', 'aria-sort': 'none' }, h('button', { type: 'button', title: c.sort ? 'Sort by ' + c.label : c.label, onclick: () => { if (!c.sort) return; if (sortKey === c.key) sortDir = -sortDir; else { sortKey = c.key; sortDir = 1; } refresh(); } }, c.label + (sortKey === c.key ? (sortDir > 0 ? ' ▲' : ' ▼') : ''))));
   }
   function refresh() {
     data = cfg.rows().slice();
     const col = cfg.cols.find(c => c.key === sortKey);
     if (col && col.sort) data.sort((a, b) => { const x = col.sort(a), y = col.sort(b); return (x < y ? -1 : x > y ? 1 : 0) * sortDir; });
-    $$('button', head).forEach((b, i) => { const c = cfg.cols[i]; b.textContent = c.label + (sortKey === c.key ? (sortDir > 0 ? ' ▲' : ' ▼') : ''); b.setAttribute('aria-sort', sortKey === c.key ? (sortDir > 0 ? 'ascending' : 'descending') : 'none'); });
+    $$('.th', head).forEach((th, i) => { const c = cfg.cols[i]; $('button', th).textContent = c.label + (sortKey === c.key ? (sortDir > 0 ? ' ▲' : ' ▼') : ''); th.setAttribute('aria-sort', sortKey === c.key ? (sortDir > 0 ? 'ascending' : 'descending') : 'none'); });
     body.style.height = data.length * ROWH + 'px'; empty.style.display = data.length ? 'none' : 'block';
     if (!data.length) {   // say WHY it is empty: nothing recorded, or the user's own filter excluded everything
-      clear(empty);
-      if (S.q || S.range) empty.appendChild(emptyState('search', S.q ? 'No matches for “' + short(S.q, 40) + '”' : 'Nothing in the selected time range', 'Your ' + (S.q ? 'search' : 'time range') + ' is hiding every row.', h('button', { class: 'btn', type: 'button', onclick: () => { const i = $('#search'); if (i) i.value = ''; setState({ q: '', range: null }); } }, 'Clear search and time range')));
-      else empty.appendChild(emptyState('info', cfg.empty || 'Nothing to show', 'The recorder did not capture anything of this kind in this run.'));
+      clear(emptyCell);
+      if (S.q || S.range) emptyCell.appendChild(emptyState('search', S.q ? 'No matches for “' + short(S.q, 40) + '”' : 'Nothing in the selected time range', 'Your ' + (S.q ? 'search' : 'time range') + ' is hiding every row.', h('button', { class: 'btn', type: 'button', onclick: () => { const i = $('#search'); if (i) i.value = ''; setState({ q: '', range: null }); } }, 'Clear search and time range')));
+      else emptyCell.appendChild(emptyState('info', cfg.empty || 'Nothing to show', 'The recorder did not capture anything of this kind in this run.'));
     }
     count.textContent = fmtN(data.length) + ' row' + (data.length === 1 ? '' : 's');
     if (cfg.onCount) cfg.onCount(data.length);

@@ -8,7 +8,7 @@ function timelineView() {
   const reset = h('button', { class: 'btn', type: 'button', onclick: () => setState({ range: null }) }, 'Reset zoom');
   const toolbar = h('div', { class: 'toolbar' }, flagBtn, probeBtn, reset, h('span', { class: 'muted', style: { marginLeft: 'auto' } }, 'Drag the axis (or the chart above) to zoom · click a marker or lane for details'));
   const axisHolder = h('div', { style: { borderBottom: '1px solid var(--line)', background: 'var(--surface)', flex: 'none' } });
-  const scroller = h('div', { class: 'tl' });
+  const scroller = h('div', { class: 'tl', tabindex: '0', role: 'group', 'aria-label': 'Timeline rows. Scroll with the arrow keys.' });
   const navWrap = h('div', { style: { padding: '8px 0 0', background: 'var(--surface)', borderBottom: '1px solid var(--line)', flex: 'none' } }, nav);
   const root = h('div', { class: 'view fill', id: 'view-timeline' }, toolbar, navWrap, axisHolder, scroller);
   let rows = [], W = 900, d0 = 0, d1 = DUR, bodySvg = null, spacer = null, raf = 0;

@@ -169,7 +169,7 @@ def render(d: dict) -> str:
 {banner}
 {notable}
 {verdict}
-<details open><summary><h2>Totals</h2></summary><div class="wrap"><table><thead><tr><th scope="col"></th>
+<details open><summary><h2>Totals</h2></summary><div class="wrap"><table><thead><tr><th scope="col">Measure</th>
 <th scope="col" class="num">Before</th><th scope="col" class="num">After</th><th scope="col" class="num">Change</th></tr></thead>
 <tbody>{totals}</tbody></table></div></details>
 {"".join(sections)}

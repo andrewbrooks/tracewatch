@@ -110,7 +110,7 @@ function treeView() {
     for (const [id, n] of pos) {
       const p = n.p, sevc = p.severity ? SEVC[p.severity] : null, ex = exitTag(p), ev = evByProc.get(id) || [];
       const cnt = k_ => ev.filter(e => groupOf(e) === k_ && e.kind !== 'exit' && !(e.kind === 'udp' && e.detail.probe)).length;
-      const g = s('g', { class: 'node' + (id === sel ? ' sel' : '') + (path.has(id) && id !== sel ? ' onpath' : '') + (p.severity === 'high' || p.severity === 'medium' ? ' flag-' + p.severity : '') + (m && !m.has(id) ? ' dimmed' : ''), transform: `translate(${n.x},${n.y})`, tabindex: id === focusId() ? '0' : '-1', 'data-fk': 'n:' + id, role: 'treeitem', 'aria-label': `${p.name} pid ${p.pid}, ${p.exit ? p.exit.status : 'no exit recorded'}${p.severity ? ', ' + p.severity + ' severity finding' : ''}`, 'aria-selected': String(id === sel) });
+      const g = s('g', { class: 'node' + (id === sel ? ' sel' : '') + (path.has(id) && id !== sel ? ' onpath' : '') + (p.severity === 'high' || p.severity === 'medium' ? ' flag-' + p.severity : '') + (m && !m.has(id) ? ' dimmed' : ''), transform: `translate(${n.x},${n.y})`, tabindex: id === focusId() ? '0' : '-1', 'data-fk': 'n:' + id, role: 'treeitem', 'aria-selected': String(id === sel) });
       g.appendChild(s('rect', { class: 'nbox', width: NW - 8, height: NH, rx: 9 }));
       const inner = s('g', { 'clip-path': 'url(#nclip)' });
       if (sevc) inner.appendChild(s('rect', { x: 0, y: 0, width: 4, height: NH, fill: sevc }));
@@ -131,11 +131,12 @@ function treeView() {
       inner.appendChild(s('text', { class: 'ex' + (ex.ok ? ' ok' : ''), x: NW - 16, y: 53.5, 'text-anchor': 'end', fill: ex.c }, ex.t));
       g.appendChild(inner);
       if (p.children.length) {
-        const cg = s('g', { transform: `translate(${NW - 8},${NH / 2})`, onclick: ev => { ev.stopPropagation(); collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); render(); }, role: 'button', 'aria-label': collapsed.has(id) ? 'Expand children' : 'Collapse children' });
+        const cg = s('g', { transform: `translate(${NW - 8},${NH / 2})`, onclick: ev => { ev.stopPropagation(); collapsed.has(id) ? collapsed.delete(id) : collapsed.add(id); render(); }, role: 'button', 'aria-label': collapsed.has(id) ? '+' + p.children.length + ' children, expand' : 'Collapse children' });   // the collapsed button shows "+N": its name must contain that
         cg.appendChild(s('circle', { class: 'chev', r: 9 }));
-        cg.appendChild(s('text', { class: 'chev-t', 'text-anchor': 'middle', y: 4 }, collapsed.has(id) ? '+' + p.children.length : '−'));
+        cg.appendChild(s('text', { class: 'chev-t', 'aria-hidden': 'true', 'text-anchor': 'middle', y: 4 }, collapsed.has(id) ? '+' + p.children.length : '−'));
         g.appendChild(cg);
       }
+      g.setAttribute('aria-description', `Process ${p.name}, pid ${p.pid}, ${p.exit ? p.exit.status : 'no exit recorded'}${p.severity ? ', ' + p.severity + ' severity finding' : ''}`);
       g.addEventListener('click', () => setState({ sel: { type: 'proc', id } }));
       g.addEventListener('keydown', ev => nodeKey(ev, id));
       nodeEls.set(id, g);

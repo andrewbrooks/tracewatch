@@ -22,7 +22,7 @@ function evItem(e, neutral) {   // neutral: inside a finding the kind's colour w
 function findingCard(f, compact) {
   return h('div', { class: 'finding', style: { borderLeft: '3px solid ' + SEVC[f.severity] } },
     h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, sevPill(f.severity), h('span', { class: 'rule' }, f.rule), h('span', { class: 'cat' }, f.category)),
-    h('h4', null, f.title), compact ? null : h('p', null, f.why), f.detail ? h('p', { class: 'muted mono', style: { fontSize: '11.5px' } }, short(f.detail, 400)) : null,
+    h(compact ? 'h4' : 'h3', null, f.title), compact ? null : h('p', null, f.why), f.detail ? h('p', { class: 'muted mono', style: { fontSize: '11.5px' } }, short(f.detail, 400)) : null,
     f.events.length ? h('div', { class: 'ev-list' }, f.events.slice(0, 6).map(id => E.get(id)).filter(Boolean).map(e => evItem(e, true))) : null,
     f.procs.length ? h('div', { class: 'chain', style: { marginTop: '8px' } }, f.procs.slice(0, 8).map(id => h('button', { type: 'button', class: 'cn', onclick: () => setState({ sel: { type: 'proc', id } }) }, pLabel(id)))) : null,
     compact ? null : ruleDisclosure(f.rule));
