@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent / "browser"))
-from sanitize import leaks, sanitize  # noqa: E402
+from sanitize import leaks, sanitize
 
 IDENT = {"repo": "/home/jo/code/tw", "home": "/home/jo", "user": "jo", "host": "workbox", "ips": ["10.1.2.3"]}
 

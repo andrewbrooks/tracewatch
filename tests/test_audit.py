@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "tools"))
-import audit  # noqa: E402
+import audit
 
 IDENT = {"repo": "/work/secretproj", "home": "/home/zed", "user": "zed", "host": "zedbox", "ips": ["10.20.30.40"]}
 

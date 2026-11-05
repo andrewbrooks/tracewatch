@@ -84,6 +84,7 @@ drawer, dark and light themes, and a print layout. It is written in plain JavaSc
 |---|---|---|
 | Unit tests (`tests/`) | Redaction, the join, the model, the findings rules and catalog, the renderers and their security invariants | No |
 | Browser tests (`tests/browser/run.py`) | The report in Chromium and Firefox: keyboard use, responsive layouts, themes, print, zoom, hostile data | No (a recorded demo run unlocks more checks) |
+| Accessibility audit (`tests/browser/axe_check.py`, optional) | axe-core over every report view at desktop and phone widths, both themes (needs `npm install axe-core`) | No |
 | Integration scripts (`tests/integration/*.sh`) | Real recordings: fault injection, secrets that must never reach disk, websockets, HTTP/2, shared sockets, size caps | Yes |
 
 Several security claims are checked by **mutation**: break the code on purpose and confirm a test fails.

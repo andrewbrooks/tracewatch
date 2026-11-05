@@ -42,7 +42,7 @@ For the command you launch (and everything it starts) it records:
 - **network activity**: HTTP(S) requests and responses through the proxy (including HTTP/2 and websockets),
   which process sent each one, DNS lookups the proxy performed, and TCP connections that bypassed the proxy
 - **file activity** for a short watch list (credential stores, temp directories), not every file open
-- about 25 rule-based **findings** (e.g. "wrote a file, then executed it", "credential sent over plain HTTP"),
+- 24 rule-based **findings** (e.g. "wrote a file, then executed it", "credential sent over plain HTTP"),
   each pointing at the events that triggered it. Every rule has an entry in a built-in dictionary (what it means, what it
   cannot tell you, what benign activity looks the same, and whether it has ever fired on a real recording), shown in the
   report. The severities are rough heuristics, not measurements
@@ -55,7 +55,7 @@ navigation, prints reasonably). The Markdown report is the same information as a
 - Linux. It was developed and tested on **WSL2 with Docker Desktop**; plain Linux with Docker should work but has
   not been exercised as much.
 - Python 3.12+ and [uv](https://docs.astral.sh/uv/)
-- Docker that can run a privileged container (Tracee runs as `aquasec/tracee:latest`; tested with v0.24.1)
+- Docker that can run a privileged container (Tracee runs as `aquasec/tracee:0.24.1`, the only version it has been tested with)
 - `setpriv` (util-linux) and `curl` (used by the demo and tests)
 
 Tracee runs as a **privileged container with host PID access**. Only run this on a machine where that is acceptable.
@@ -63,7 +63,7 @@ Tracee runs as a **privileged container with host PID access**. Only run this on
 ## Quick start
 
 ```
-git clone <this repo> && cd tracewatch
+git clone https://github.com/andrewbrooks/tracewatch.git && cd tracewatch
 uv sync
 .venv/bin/tracewatch record --out out/runs --name hello -- sh -c 'curl -s https://example.com/ >/dev/null'
 .venv/bin/tracewatch report out/runs/hello          # writes out/runs/hello/report.html
@@ -110,8 +110,10 @@ uv sync
 ```
 
 Integration tests (`tests/integration/*.sh`) record real processes and need Docker and the Tracee image.
-The browser tests (`tests/browser/run.py`, Playwright; `TW_BROWSER=firefox` for Firefox) check the interactive
-report's behavior, accessibility basics, and the security properties of the embedded data.
+The browser tests (`tests/browser/run.py`; run `uv run playwright install chromium` first, `TW_BROWSER=firefox` for
+Firefox) check the interactive report's behavior, accessibility basics, and the security properties of the embedded data.
+`tests/browser/axe_check.py` runs an optional axe-core accessibility audit. `tools/audit.py` checks a repository for
+things that should not be published, and `tools/build_examples.py` rebuilds the example reports in `docs/`.
 
 ## Documentation
 

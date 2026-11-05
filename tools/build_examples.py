@@ -129,7 +129,7 @@ h1 {{ font-size: 28px; margin: 0 0 6px; letter-spacing: -.01em; }} h2 {{ font-si
 .card {{ background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow-card); }}
 .card p {{ margin: 0 0 10px; color: var(--text-2); }} .try {{ font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); margin-top: 10px; }}
 .card ul {{ margin: 4px 0 12px; padding-left: 18px; color: var(--text-2); }} .links {{ display: flex; gap: 8px; flex-wrap: wrap; margin: 0; }}
-a {{ color: var(--accent); }} a.open {{ display: inline-block; padding: 5px 12px; border: 1px solid var(--line-2); border-radius: 8px; text-decoration: none; color: var(--text); font-weight: 600; }}
+a {{ color: color-mix(in srgb, var(--accent) 62%, var(--text)); }} a.open {{ display: inline-block; padding: 5px 12px; border: 1px solid var(--line-2); border-radius: 8px; text-decoration: none; color: var(--text); font-weight: 600; }}
 a.open:hover {{ background: var(--hover); }} a:focus-visible {{ outline: 2px solid var(--accent); outline-offset: 2px; }}
 .note {{ color: var(--text-3); font-size: 13px; margin-top: 26px; max-width: 760px; }}
 </style>

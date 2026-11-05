@@ -50,7 +50,8 @@ tracewatch is an experiment, not a security product. This is what it does not do
 
 - Tested in Chromium and Firefox. Safari/WebKit and a physical printer were not tried.
 - Zoom has buttons, keys and Ctrl + wheel; two-finger pinch on a touch screen is not supported.
-- There has been no screen-reader audit (roles, labels, keyboard and focus handling were built and tested, but not heard).
+- Automated accessibility checks (axe-core) find no violations, and keyboard and focus handling are tested, but the report has not been
+  used with a real screen reader.
 - The timeline view is not printed.
 
 ## Not done on purpose

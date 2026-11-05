@@ -3,11 +3,11 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-cztPl_SsHxgdOdKzICncloxM'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-j7yU-o20yujeP7yXRUY1ajFX'; base-uri 'none'; form-action 'none'">
 <meta name="color-scheme" content="dark light">
 <meta name="generator" content="tracewatch 0.1.0">
 <title>tracewatch diff: bash /home/dev/project/tests/fixtures/badactor_workload.sh</title>
-<style nonce="cztPl_SsHxgdOdKzICncloxM">
+<style nonce="j7yU-o20yujeP7yXRUY1ajFX">
 :root {
   color-scheme: dark;
   --page: #0a0d12; --surface: #10151c; --raised: #161c25; --raised-2: #1c2330;
@@ -84,7 +84,7 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 <div class="banner"><b><span aria-hidden="true">Δ</span> Behaviour changed</b><span class="muted">145 differences</span></div>
 <section aria-label="What changed"><h2>What changed</h2><ul class="notable"><li>new destination 127.0.0.1:18481</li><li>new destination 127.0.0.1:18482 (BYPASSED THE PROXY)</li><li>new destination 127.0.0.1:18483 (BYPASSED THE PROXY)</li><li>new destination 127.0.0.1:18484 (BYPASSED THE PROXY)</li><li>new destination 127.0.0.1:18485 (BYPASSED THE PROXY)</li><li>new destination 127.0.0.1:18486 (BYPASSED THE PROXY)</li><li>new destination 192.0.2.10:18481 (BYPASSED THE PROXY)</li><li>new high finding: cleartext-credentials: Credentials sent over unencrypted HTTP to 127.0.0.1</li><li>new high finding: credential-file-access: cat reads a credential file: /home/dev/project/out/simulation/fakehome/.aws/credentials</li><li>new high finding: credential-file-access: cat reads a credential file: /home/dev/project/out/simulation/fakehome/.ssh/id_rsa</li><li>new high finding: drop-and-execute: File written then executed: /dev/shm/tw_sim_stage/sshd</li><li>new medium finding: encoded-payload: Encoded code passed to an interpreter (bash)</li><li>new medium finding: encoded-payload: Encoded code passed to an interpreter (perl)</li><li>new medium finding: encoded-payload: Encoded code passed to an interpreter (python3)</li><li>new medium finding: masquerade: 0:2] pretends to be something else</li><li>…and 59 more (see the sections below)</li></ul></section>
 
-<details open><summary><h2>Totals</h2></summary><div class="wrap"><table><thead><tr><th scope="col"></th>
+<details open><summary><h2>Totals</h2></summary><div class="wrap"><table><thead><tr><th scope="col">Measure</th>
 <th scope="col" class="num">Before</th><th scope="col" class="num">After</th><th scope="col" class="num">Change</th></tr></thead>
 <tbody><tr><td>processes</td><td class="num">31</td><td class="num">163</td><td class="num">+132</td></tr><tr><td>http</td><td class="num">9</td><td class="num">7</td><td class="num">-2</td></tr><tr><td>destinations</td><td class="num">4</td><td class="num">8</td><td class="num">+4</td></tr><tr><td>dns_names</td><td class="num">1</td><td class="num">2</td><td class="num">+1</td></tr><tr><td>files</td><td class="num">6</td><td class="num">9</td><td class="num">+3</td></tr><tr><td>commands</td><td class="num">28</td><td class="num">64</td><td class="num">+36</td></tr></tbody></table></div></details>
 <details open><summary><h2>Commands</h2><span class="pill">+46 / −26</span></summary><div class="wrap"><table><thead><tr><th scope="col">Change</th><th scope="col">Item</th><th scope="col">Detail</th></tr></thead><tbody><tr><td><span class="tag t-added"><span aria-hidden="true">+</span> ADDED</span></td><td class="mono">&#x27;[kworker/0:2]&#x27; 0.3</td><td class="muted">count=1</td></tr><tr><td><span class="tag t-added"><span aria-hidden="true">+</span> ADDED</span></td><td class="mono">/bin/sh /usr/bin/lesspipe</td><td class="muted">count=2</td></tr><tr><td><span class="tag t-added"><span aria-hidden="true">+</span> ADDED</span></td><td class="mono">/bin/sh /usr/bin/which node</td><td class="muted">count=1</td></tr><tr><td><span class="tag t-added"><span aria-hidden="true">+</span> ADDED</span></td><td class="mono">/dev/shm/tw_sim_stage/sshd 0.2</td><td class="muted">count=1</td></tr><tr><td><span class="tag t-added"><span aria-hidden="true">+</span> ADDED</span></td><td class="mono">awk &#x27;BEGIN {
