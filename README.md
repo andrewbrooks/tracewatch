@@ -8,6 +8,18 @@ It started as a way to play with [Tracee](https://github.com/aquasecurity/tracee
 Claude (Claude Code). It is a toy-sized "flight recorder", not a security product: nothing here has been hardened,
 audited, or tested beyond the scenarios in this repository.
 
+## Screenshots
+
+From the scripted demo workload (`tests/fixtures/demo.sh`). Machine-specific paths, user and host names and IP
+addresses were replaced before rendering (`tests/browser/screenshots.py`).
+
+![Overview, dark theme](docs/screenshots/overview-dark.png)
+
+| | |
+|---|---|
+| ![Process tree](docs/screenshots/process-tree.png) | ![Request details](docs/screenshots/http-detail.png) |
+| ![Findings, light theme](docs/screenshots/findings-light.png) | ![Overview, light theme](docs/screenshots/overview-light.png) |
+
 ## What it does
 
 ```
