@@ -393,6 +393,22 @@ def build(run_dir: Path | str) -> dict:
                 clean=c.get("clean"),
             )
     tunnels = [r for r in fl if r["kind"] == "connect"]
+    tls_refused = {r["conn_id"]: r for r in fl if r["kind"] == "tls_failed" and r.get("side") == "client"}
+    tls_ok = {r["conn_id"] for r in fl if r["kind"] == "tls_client"}
+
+    def tunnel_note(conn_id: str, res: dict) -> str | None:
+        """Why a CONNECT tunnel produced no request, when the proxy saw the reason."""
+        if conn_id in tls_refused:
+            return (
+                "client refused the recorder's certificate (pinning, or it does not trust the CA): content not recorded"
+            )
+        if conn_id in tls_ok and not res.get("status"):
+            return (
+                "TLS completed, then the client sent no request (a certificate pin checked after the handshake "
+                "looks like this; so does an idle pre-connect)"
+            )
+        return None
+
     with_flows = {h["conn_id"] for h in http}
     for r in tunnels:
         if r["conn_id"] in with_flows:
@@ -410,7 +426,7 @@ def build(run_dir: Path | str) -> dict:
             "path": f":{r['port']}",
             "port": r["port"],
             "status": res.get("status"),
-            "error": res.get("error"),
+            "error": res.get("error") or tunnel_note(r["conn_id"], res),
             "http_version": None,
             "duration_ms": None,
             "ttfb_ms": None,
@@ -422,6 +438,7 @@ def build(run_dir: Path | str) -> dict:
             "conn_id": r["conn_id"],
             "websocket": False,
             "tls": None,
+            "tls_refused": tls_refused[r["conn_id"]]["error"] if r["conn_id"] in tls_refused else None,
             "attribution": {
                 "method": attr.get("method"),
                 "pid": attr.get("pid"),

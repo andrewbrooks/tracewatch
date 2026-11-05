@@ -66,10 +66,13 @@ def assess(run_dir: Path) -> dict:
     ev, ev_stats = _read_jsonl(run_dir / "events.jsonl")
     ev.sort(key=lambda e: e.get("t_mono_ns", 0))
     tracee_recs: list[dict] = []
+    flow_recs: list[dict] = []
     for name in SOURCES:
         recs, stats = (ev, ev_stats) if name == "events.jsonl" else _read_jsonl(run_dir / name)
         if name == "tracee.jsonl":
             tracee_recs = recs
+        elif name == "flows.jsonl":
+            flow_recs = recs
         out["files"][name] = stats
     status = m.get("status")
     out["status"] = status
@@ -176,6 +179,18 @@ def assess(run_dir: Path) -> dict:
         n = sum(r["count"] for r in out["unproxied"])
         losses.append(
             f"{n} connection(s) to {len(out['unproxied'])} destination(s) bypassed the proxy: content not recorded"
+        )
+    rejected: dict[str, dict] = {}
+    for r in flow_recs:
+        if r.get("kind") == "tls_failed" and r.get("side") == "client":
+            d = rejected.setdefault(r.get("sni") or "?", {"count": 0, "error": r.get("error")})
+            d["count"] += 1
+    out["tls_rejected"] = [{"host": h, **d} for h, d in sorted(rejected.items())]
+    if out["tls_rejected"]:
+        n = sum(r["count"] for r in out["tls_rejected"])
+        losses.append(
+            f"{n} connection(s) to {len(rejected)} host(s): the client refused the recorder's certificate "
+            "(certificate pinning, or it does not trust the CA): content not recorded"
         )
     if m.get("proxy_env", {}).get("inherited_no_proxy"):
         out["reasons"].append(

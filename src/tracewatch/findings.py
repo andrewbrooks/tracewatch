@@ -160,6 +160,18 @@ def find(model: dict) -> list[dict]:
             evid[:50],
             detail=f"{u['count']} connection(s)",
         )
+    for r in model["integrity"].get("tls_rejected", []):
+        add(
+            "tls-client-rejected",
+            "medium",
+            "network",
+            f"Client refused the recorder's certificate: {r['host']}",
+            "The process aborted the TLS handshake with the recorder's proxy (certificate pinning, or it does not trust "
+            "the per-run CA). It still reached the network through the proxy, but its requests and responses were "
+            "NOT recorded.",
+            [h["event"] for h in model["http"] if h["event"] and h.get("tls_refused") and h["host"] == r["host"]][:50],
+            detail=f"{r['count']} connection(s)" + (f": {r['error']}" if r.get("error") else ""),
+        )
     per_host_cred: dict[str, list[str]] = {}
     for h in model["http"]:
         if not h["event"]:

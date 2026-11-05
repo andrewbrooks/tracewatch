@@ -22,7 +22,10 @@ if not os.path.exists(resf):
     print("FAIL the client did not finish")
     sys.exit(1)
 res = json.load(open(resf))
-check("all four scenarios got an HTTP 200 through the proxy", all("200" in v for v in res.values()) and len(res) == 4)
+check(
+    "all five scenarios (six requests) got an HTTP 200 through the proxy",
+    all("200" in v for v in res.values()) and len(res) == 6,
+)
 
 fl = load(f"{run}/flows.jsonl")
 tr = load(f"{run}/tracee.jsonl")
@@ -36,18 +39,23 @@ for p in model["processes"]:
         procs["child:" + c.split("--child")[1].split()[1]] = p["pid"]
     elif "shared_client.py" in c:
         procs["parent"] = p["pid"]
-check("the parent and all four children are in the process tree", len(procs) == 5)
+check("the parent and all five children are in the process tree", len(procs) == 6)
 
 net = {}
 for h in model["http"]:
     net[h["path"].lstrip("/")] = h
 conns = {c["conn_id"]: c for c in fl if c["kind"] == "conn"}
 flows = {f["path"].lstrip("/"): f for f in fl if f["kind"] == "flow"}
-check("each scenario produced a recorded flow", set(flows) >= {"s1", "s2", "s3", "s4"})
+check("each scenario produced a recorded flow", set(flows) >= {"s1", "s2", "s3", "s4", "s5a", "s5b"})
 want = {  # scenario -> (who the recording should name, why)
     "s1": ("child:s1", "connected by the parent, then inherited by a child that sent the request"),
     "s2": ("parent", "two holders at accept; the parent sent"),
     "s3": ("child:s3", "the parent closed its copy: one holder, the connector"),
+    "s5a": ("parent", "first request on a keep-alive connection, sent by the parent"),
+    "s5b": (
+        "child:s5b",
+        "second request on the SAME connection, sent by a child: the parent's earlier send must not count",
+    ),
     "s4": ("child:s4", "two holders at accept; the child connected and sent"),
 }
 for label, (who, why) in want.items():

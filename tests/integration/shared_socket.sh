@@ -7,6 +7,7 @@ rm -rf "$OUT"; mkdir -p "$OUT/runs"
 cat > "$OUT/server.py" <<'P'
 import http.server, sys
 class H(http.server.BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"  # keep-alive
     def do_GET(self):
         b = b'{"ok":true}'
         self.send_response(200); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)

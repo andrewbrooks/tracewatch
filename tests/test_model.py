@@ -451,3 +451,36 @@ def test_repeated_resolver_contacts_within_50ms_are_one_event_with_a_count(tmp_p
     dns = [e for e in m["events"] if e["kind"] == "dns" and e["sub"] == "resolver"]
     assert [e["detail"]["count"] for e in dns] == [2, 1] and dns[0]["title"].endswith("×2")
     assert m["dns"]["resolver_contacts"][0]["count"] == 3  # the aggregate still counts every contact
+
+
+def _tunnel_run(tmp_path, *extra):
+    t, f = proxy_data()
+    conn = f[0]
+    return build(
+        make_run(
+            tmp_path,
+            tree_events() + t,
+            [conn, {"kind": "connect", "flow_id": "X1", "conn_id": "C1", "client_port": 5, "host": "pinned.example",
+                    "port": 443, "t_mono_ns": conn["accept_mono_ns"] + 10**6, "t_wall_ns": 1}, *extra],
+        )
+    )  # fmt: skip
+
+
+def test_a_client_that_refuses_the_recorders_certificate_is_reported_with_the_reason(tmp_path):
+    failed = {"kind": "tls_failed", "side": "client", "conn_id": "C1", "sni": "pinned.example",
+              "error": "The client does not trust the proxy's certificate (tlsv1 alert unknown ca)", "t_mono_ns": 1, "t_wall_ns": 1}  # fmt: skip
+    m = _tunnel_run(tmp_path, failed)
+    (h,) = [x for x in m["http"] if x["method"] == "CONNECT"]
+    assert "refused the recorder's certificate" in h["error"] and h["tls_refused"]
+    assert m["integrity"]["tls_rejected"][0]["host"] == "pinned.example"
+    assert m["integrity"]["verdict"] == "complete-with-losses"
+    (f,) = [x for x in m["findings"] if x["rule"] == "tls-client-rejected"]
+    assert f["severity"] == "medium" and f["events"] == [h["event"]]
+
+
+def test_tls_that_completed_with_no_request_is_described_not_called_an_attack(tmp_path):
+    ok = {"kind": "tls_client", "conn_id": "C1", "sni": "pinned.example", "t_mono_ns": 1, "t_wall_ns": 1}
+    m = _tunnel_run(tmp_path, ok)
+    (h,) = [x for x in m["http"] if x["method"] == "CONNECT"]
+    assert "sent no request" in h["error"] and "idle pre-connect" in h["error"]
+    assert not m["integrity"]["tls_rejected"] and not [x for x in m["findings"] if x["rule"] == "tls-client-rejected"]

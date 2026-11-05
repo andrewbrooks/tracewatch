@@ -392,6 +392,38 @@ def server_connected(data) -> None:
     )
 
 
+def _tls_failed(side: str):
+    def hook(data) -> None:
+        c = data.conn
+        _emit(
+            "tls_failed",
+            lambda: {
+                "kind": "tls_failed",
+                "side": side,
+                "conn_id": data.context.client.id,
+                "sni": _red.text(str(c.sni or c.address[0] if c.address else c.sni or "")),
+                "error": _red.text(str(c.error or ""))[:300],
+            },
+        )
+
+    return hook
+
+
+# Clients that pin certificates (or do not trust the per-run CA) abort the handshake: without this record the report
+# would show a bare CONNECT and nothing about WHY no request was recorded.
+def tls_established_client(data) -> None:
+    """The client completed the handshake with the recorder's certificate. If no request follows, the report says so:
+    a pin checked AFTER the handshake (curl --pinnedpubkey) looks exactly like this."""
+    _emit(
+        "tls_client",
+        lambda: {"kind": "tls_client", "conn_id": data.context.client.id, "sni": _red.text(str(data.conn.sni or ""))},
+    )
+
+
+tls_failed_client = _tls_failed("client")
+tls_failed_server = _tls_failed("server")
+
+
 def tls_established_server(data) -> None:
     """Upstream TLS facts (version, cipher, ALPN, certificate subject/issuer/expiry)."""
     c = data.conn

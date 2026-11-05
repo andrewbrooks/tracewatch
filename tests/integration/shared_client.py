@@ -5,6 +5,7 @@ Each scenario sends one plain-HTTP request through the recorder's proxy and the 
   s1  parent connects, THEN a child inherits the connected socket and sends the request   (opener != writer)
   s2  child inherits an unconnected socket; the PARENT connects and sends                  (two holders at accept)
   s3  parent hands an unconnected socket to a child and closes its copy; the CHILD connects (one holder: the child)
+  s5  one keep-alive connection: the parent sends request A, then a child inherits it and sends request B
   s4  both hold an unconnected socket; the CHILD connects and sends                        (two holders at accept)
 """
 
@@ -34,10 +35,32 @@ def request(sock, label, port):
     return data.split(b"\r\n", 1)[0].decode(errors="replace")
 
 
+def request_ka(sock, label, port):
+    """One request on a keep-alive connection: read exactly one response, leave the connection open."""
+    sock.sendall(f"GET http://127.0.0.1:{port}/{label} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\n\r\n".encode())
+    data = b""
+    while b"\r\n\r\n" not in data:
+        chunk = sock.recv(65536)
+        if not chunk:
+            return "connection closed before a response: " + data.decode(errors="replace")[:60]
+        data += chunk
+    head, _, body = data.partition(b"\r\n\r\n")
+    want = int(next(x.split(b":")[1] for x in head.split(b"\r\n") if x.lower().startswith(b"content-length")))
+    while len(body) < want:
+        chunk = sock.recv(65536)
+        if not chunk:
+            break
+        body += chunk
+    return head.split(b"\r\n", 1)[0].decode(errors="replace")
+
+
 def child(mode, label, fd, port):
     s = socket.socket(fileno=int(fd))
     if mode == "hold":  # just keep the inherited descriptor alive across the proxy's accept-time lookup
         time.sleep(2.5)
+        return
+    if mode == "send_ka":
+        print(request_ka(s, label, port))
         return
     if mode == "connect":
         s.connect(proxy_addr())
@@ -80,6 +103,13 @@ def main():
     s = socket.socket()
     c = spawn("connect", "s4", s, port)
     res["s4"] = c.communicate()[0].strip()
+    s.close()
+    # s5: ONE keep-alive connection, two requests, two different senders
+    s = socket.create_connection(proxy_addr())
+    res["s5a"] = request_ka(s, "s5a", port)
+    time.sleep(0.3)
+    c = spawn("send_ka", "s5b", s, port)
+    res["s5b"] = c.communicate()[0].strip()
     s.close()
     json.dump(res, open(out, "w"))
 
