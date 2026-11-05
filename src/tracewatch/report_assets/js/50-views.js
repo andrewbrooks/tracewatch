@@ -33,7 +33,7 @@ function overviewView() {
     tile('HTTP requests', fmtN(st.http), plural(DATA.http.filter(x => x.error || (x.status || 0) >= 400).length, 'error') + ' · ' + plural(st.websockets, 'websocket'), 'rgba(217,89,38,.16)', tab('http')),
     tile('DNS names', fmtN(st.dns_names), plural(DATA.dns.resolver_contacts.length, 'resolver contact'), 'rgba(213,81,129,.16)', tab('dns')),
     tile('Watched files', fmtN(st.files), 'credential & temp paths', 'rgba(201,133,0,.16)', tab('files')));
-  const activity = chartCard('Activity over time', () => activityLanes(), activityTable, { count: fmtN(st.events) + ' events', cls: 'span2' });
+  const activity = chartCard('Activity over time', () => h('div', null, storyRibbon(), activityLanes()), activityTable, { count: fmtN(st.events) + ' events', cls: 'span2' });
   const dests = DATA.destinations.map((d, i) => ({ d, i })).sort((a, b) => (b.d.via === 'direct') - (a.d.via === 'direct') || b.d.requests - a.d.requests).slice(0, 8)
     .map(({ d, i }) => ({ label: (d.name || d.ip) + ':' + d.port, value: d.requests, sub: d.via === 'direct' ? 'direct: content not recorded' : fmtB(d.bytes_in) + ' received', flag: d.via === 'direct' && !d.loopback, onclick: () => setState({ sel: { type: 'dest', id: i } }) }));
   const destCard = chartCard('Top destinations', () => rankedBars(dests, { empty: 'No network activity recorded' }), () => rankedTable(dests, ['Destination', 'Requests']), { count: fmtN(DATA.destinations.length) });
@@ -44,8 +44,7 @@ function overviewView() {
   const top = DATA.findings.filter(f => f.severity !== 'info').slice(0, 4);
   const fcard = h('section', { class: 'card' }, h('div', { class: 'card-h' }, h('h3', null, 'Top findings'), h('span', { class: 'cnt' }, fmtN(DATA.findings.length)), h('span', { class: 'sp' }), h('button', { class: 'btn', type: 'button', onclick: tab('findings') }, 'All findings')),
     h('div', { class: 'card-b' }, top.length ? top.map(f => h('div', { style: { cursor: 'pointer' }, onclick: () => setState({ sel: { type: 'finding', id: f.id } }) }, findingCard(f, true))) : h('div', { class: 'empty' }, 'No medium or high indicators fired.')));
-  const story = storyChain();
-  const root = viewShell('overview', 'Overview', null, banner, kpis, story, h('div', { class: 'grid', style: { gridTemplateColumns: '1fr', marginTop: story ? '14px' : '0' } }, activity), h('div', { class: 'grid g2', style: { marginTop: '14px' } }, destCard, busyCard), h('div', { class: 'grid g2', style: { marginTop: '14px' } }, fcard, cov));
+  const root = viewShell('overview', 'Overview', null, banner, kpis, h('div', { class: 'grid', style: { gridTemplateColumns: '1fr' } }, activity), h('div', { class: 'grid g2', style: { marginTop: '14px' } }, destCard, busyCard), h('div', { class: 'grid g2', style: { marginTop: '14px' } }, fcard, cov));
   root.onShow = () => { activity.redraw(); };
   return root;
 }

@@ -569,7 +569,7 @@ def run_keyboard(b, path):
     )
     # zoom controls
     before = p.locator("#view-tree .zl").inner_text()
-    p.click("button[aria-label='Zoom in']")
+    p.click("#view-tree button[aria-label='Zoom in']")
     check(
         f"the zoom buttons work ({before} -> {p.locator('#view-tree .zl').inner_text()})",
         p.locator("#view-tree .zl").inner_text() != before,
@@ -684,53 +684,141 @@ def run_print(b, path):
 
 
 def run_story(b, path):
-    """The Overview's "How it unfolded" chain: ordered, clickable, keyboard-reachable, and fits every width."""
+    """ "How it unfolded": a one-line ribbon of the notable steps, inside the activity card."""
     s = Session(b, path)
     p = s.page
-    n = p.locator(".story-node").count()
-    check(f"the Overview shows a chain of notable steps ({n})", n >= 3)
+    n = p.locator(".rchip:not(.more)").count()
+    check(f"the activity card carries a ribbon of notable steps ({n})", n >= 3)
+    check(
+        "the ribbon is inside the activity card, not a card of its own",
+        p.locator("#view-overview .card:has(h3:text-is('Activity over time')) .ribbon").count() == 1
+        and p.locator("#view-overview .story").count() == 0,
+    )
+    check(
+        "the ribbon is a single line",
+        p.evaluate(
+            "(() => { const r = document.querySelector('.ribbon'); return r.getBoundingClientRect().height < 56; })()"
+        ),
+    )
     ts = p.evaluate(
-        "[...document.querySelectorAll('.story-node .story-meta')].map(e => parseFloat(e.textContent.replace('+', '')))"
+        "[...document.querySelectorAll('.rchip:not(.more) .rtime')].map(e => parseFloat(e.textContent.replace('+', '')))"
     )
     check("the steps are in time order", ts == sorted(ts))
     check(
         "a high-severity step is visibly stronger than a medium one (different border colour)",
         p.evaluate(
-            "(() => { const a = document.querySelector('.story-node.st-high'), b = document.querySelector('.story-node.st-medium'); return !a || !b || getComputedStyle(a).borderLeftColor !== getComputedStyle(b).borderLeftColor; })()"
+            "(() => { const a = document.querySelector('.rchip.st-high'), b = document.querySelector('.rchip.st-medium'); return !a || !b || getComputedStyle(a).borderLeftColor !== getComputedStyle(b).borderLeftColor; })()"
         ),
     )
-    check(
-        "connectors carry the time gap between steps as text",
-        p.locator(".story-gap").count() == n - 1
-        and "ms" in p.locator(".story-gap").first.inner_text()
-        or "s" in p.locator(".story-gap").first.inner_text(),
-    )
-    first = p.locator(".story-node").first
+    first = p.locator(".rchip:not(.more)").first
     title = first.get_attribute("title")
     first.focus()
     p.keyboard.press("Enter")
     p.wait_for_timeout(500)
     check(
         "Enter on a step opens that finding's details",
-        p.locator("#drawer.open").count() == 1 and title.split(" (")[0][:20] in p.locator("#drawer").inner_text(),
+        p.locator("#drawer.open").count() == 1 and title.split(": ", 1)[1][:20] in p.locator("#drawer").inner_text(),
     )
     p.keyboard.press("Escape")
     check(
         "the step stays focusable after the drawer closes",
-        p.evaluate("document.activeElement.classList.contains('story-node')"),
+        p.evaluate("document.activeElement.classList.contains('rchip')"),
     )
     check("no console errors", not s.errors, "; ".join(s.errors[:2]))
     s.page.close()
     for w, h, label in ((390, 844, "phone"), (820, 1000, "tablet")):
         s = Session(b, path, width=w, height=h)
-        p = s.page
-        over = p.evaluate("document.documentElement.scrollWidth - innerWidth")
-        direction = p.evaluate("getComputedStyle(document.querySelector('.story-track')).flexDirection")
-        check(
-            f"[{label}] the chain causes no page overflow and is {'vertical' if w <= 820 else 'horizontal'} ({direction})",
-            over <= 1 and direction == ("column" if w <= 820 else "row"),
-        )
+        over = s.page.evaluate("document.documentElement.scrollWidth - innerWidth")
+        check(f"[{label}] the ribbon causes no page overflow", over <= 1)
         s.page.close()
+
+
+def run_zoom(b, path):
+    """The activity lanes zoom (buttons, Ctrl+wheel, keys, zoom-to-selection) and scroll with a real scroll bar."""
+    s = Session(b, path)
+    p = s.page
+    q = lambda js: p.evaluate(js)  # noqa: E731
+    base_w = q("document.querySelector('.lanes-scroll').scrollWidth")
+    check(
+        "fully zoomed out, the whole run fits (nothing to scroll)",
+        base_w <= q("document.querySelector('.lanes-scroll').clientWidth") + 1,
+    )
+    check(
+        "zoom-out and Fit are disabled at the widest view",
+        p.locator(".zoomctl button[aria-label='Zoom out']").is_disabled()
+        and p.locator(".zoomctl button:text-is('Fit')").is_disabled(),
+    )
+    p.click(".zoomctl button[aria-label='Zoom in']")
+    p.click(".zoomctl button[aria-label='Zoom in']")
+    p.wait_for_timeout(250)
+    sw, cw = (
+        q("document.querySelector('.lanes-scroll').scrollWidth"),
+        q("document.querySelector('.lanes-scroll').clientWidth"),
+    )
+    check(f"zooming in makes the plot scrollable ({sw} px of content in {cw} px)", sw > cw * 2)
+    check(
+        "the scroller is a real scrollable box with a horizontal scroll bar",
+        q("getComputedStyle(document.querySelector('.lanes-scroll')).overflowX") == "auto",
+    )
+    check(
+        "the zoom level is shown",
+        "\u00d7" in p.locator(".zoomctl .zl").inner_text() and p.locator(".zoomctl .zl").inner_text() != "\u00d71.0",
+    )
+    left_before = q("document.querySelector('.lane-labels').getBoundingClientRect().left")
+    q("document.querySelector('.lanes-scroll').scrollLeft = 400")
+    p.wait_for_timeout(150)
+    check(
+        "scrolling moves the plot but not the lane labels",
+        abs(q("document.querySelector('.lane-labels').getBoundingClientRect().left") - left_before) < 1
+        and q("document.querySelector('.lanes-scroll').scrollLeft") > 100,
+    )
+    ticks = q("[...document.querySelectorAll('.lanes-scroll .axis text')].map(t => t.textContent)")
+    check(
+        f"the time axis gets finer as you zoom ({ticks[:4]})",
+        len(ticks) > 3 and any("ms" in t or "\u00b5s" in t for t in ticks),
+    )
+    # Ctrl + wheel zooms around the pointer
+    zl = p.locator(".zoomctl .zl").inner_text()
+    box = p.locator(".lanes-scroll").bounding_box()
+    p.mouse.move(box["x"] + box["width"] / 2, box["y"] + 60)
+    p.keyboard.down("Control")
+    p.mouse.wheel(0, -400)
+    p.keyboard.up("Control")
+    p.wait_for_timeout(300)
+    check(
+        f"Ctrl + wheel zooms in ({zl} -> {p.locator('.zoomctl .zl').inner_text()})",
+        p.locator(".zoomctl .zl").inner_text() != zl,
+    )
+    p.locator(".zoomctl button:text-is('Fit')").click()
+    p.wait_for_timeout(250)
+    check(
+        "Fit shows the whole run again",
+        q("document.querySelector('.lanes-scroll').scrollLeft") == 0
+        and q("document.querySelector('.lanes-scroll').scrollWidth")
+        <= q("document.querySelector('.lanes-scroll').clientWidth") + 1,
+    )
+    p.focus(".lanes-scroll")
+    p.keyboard.press("+")
+    p.wait_for_timeout(200)
+    check("the + key zooms when the chart is focused", p.locator(".zoomctl .zl").inner_text() != "\u00d71.0")
+    p.keyboard.press("-")
+    p.wait_for_timeout(200)
+    check("the - key zooms back out", p.locator(".zoomctl .zl").inner_text() == "\u00d71.0")
+    # a brushed selection can be zoomed to
+    box = p.locator(".lanes-scroll svg.chart rect[fill='transparent']").bounding_box()
+    p.mouse.move(box["x"] + box["width"] * 0.05, box["y"] + 40)
+    p.mouse.down()
+    p.mouse.move(box["x"] + box["width"] * 0.25, box["y"] + 40, steps=6)
+    p.mouse.up()
+    p.wait_for_timeout(300)
+    zts = p.locator(".zoomctl button:text-is('Zoom to selection')")
+    check("a brushed time range offers 'Zoom to selection'", zts.count() == 1)
+    zts.click()
+    p.wait_for_timeout(300)
+    check("zooming to the selection zooms in", p.locator(".zoomctl .zl").inner_text() != "\u00d71.0")
+    p.click("button:has-text('Clear time range')")
+    check("no console errors while zooming", not s.errors, "; ".join(s.errors[:2]))
+    s.page.close()
 
 
 def run_design_feedback(b, path):
@@ -767,7 +855,7 @@ def run_design_feedback(b, path):
         p.wait_for_timeout(300)
     check(
         "the activity chart is swim lanes: a lane label per kind, no stacked bars",
-        p.locator("#view-overview svg.chart .lane-label").count() >= 3,
+        p.locator("#view-overview svg.lane-labels .lane-label").count() >= 3,
     )
     check("findings are marked along the top of the chart", p.locator("#view-overview svg.chart svg").count() >= 1)
     # the drawer takes its space from the page instead of covering the table
@@ -930,6 +1018,7 @@ def main(demo_dir):
             run_responsive(b, OUT / "demo.html")
             run_print(b, OUT / "demo.html")
             run_story(b, OUT / "demo.html")
+            run_zoom(b, OUT / "demo.html")
             run_design_feedback(b, OUT / "demo.html")
         run_edges(b)
         run_hostile(b)

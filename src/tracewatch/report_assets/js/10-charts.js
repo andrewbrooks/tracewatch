@@ -95,87 +95,116 @@ function activityChart(opts) {
   return wrap;
 }
 
-/* ===== activity as swim lanes: one row per kind, a mark at each event's exact time, findings along the top ===== */
+/* ===== activity as swim lanes: one row per kind, a mark at each event's exact time, findings along the top.
+   Zoomable (buttons, Ctrl+wheel / pinch, "zoom to selection") with a real horizontal scroll bar; the lane labels stay put. ===== */
 function activityLanes() {
-  const wrap = h('div', { style: { position: 'relative' } }), legend = h('div', { class: 'legend', style: { marginBottom: '4px' } }), holder = h('div', null);
-  add(wrap, [legend, holder]);
+  const ZMAX = 600, ML = 8, MR = 14;
+  const wrap = h('div', { style: { position: 'relative' } }), legend = h('div', { class: 'legend', style: { marginBottom: '4px' } });
+  const labels = s('svg', { class: 'lane-labels', 'aria-hidden': 'true' });
+  const scroller = h('div', { class: 'lanes-scroll', tabindex: '0', role: 'group', 'aria-label': 'Activity over time. Scroll sideways; Ctrl and the mouse wheel, or the plus and minus keys, zoom.' });
+  add(wrap, [legend, h('div', { class: 'lanes' }, labels, scroller)]);
+  let zoom = 1, geom = { pw0: 600 };
   const events = () => DATA.events.filter(e => !(e.kind === 'udp' && e.detail.probe && !S.probes));
+  const clampZ = z => Math.min(ZMAX, Math.max(1, z));
+  function zoomTo(z, anchorX) {   // keep the moment under `anchorX` (px inside the scroller) where it is
+    z = clampZ(z); if (z === zoom) return;
+    const tA = ((scroller.scrollLeft + anchorX - ML) / (geom.pw0 * zoom)) * DUR;
+    zoom = z; draw(); scroller.scrollLeft = ML + (tA / DUR) * geom.pw0 * zoom - anchorX;
+  }
+  const centre = () => scroller.clientWidth / 2;
+  const tickText = (t, step) => t === 0 ? '0' : step >= 1e6 ? tickLabel(t, DUR) : (t < 1e6 ? (t / 1e3).toFixed(0) + 'µs' : (t / 1e6).toFixed(step >= 1e5 ? 1 : 2) + 'ms');
   function draw() {
-    if (!DATA.events.length) { clear(legend); clear(holder).appendChild(emptyState('timeline', 'No activity to chart', 'The recorder saw no events for this run.')); return; }
+    if (!DATA.events.length) { clear(legend); clear(scroller).appendChild(emptyState('timeline', 'No activity to chart', 'The recorder saw no events for this run.')); labels.style.display = 'none'; return; }
     const evs = events(), byKind = Object.fromEntries(KINDS.map(k => [k.id, []]));
     for (const e of evs) byKind[groupOf(e)].push(e);
+    const z = PRINTING ? 1 : zoom;
     clear(legend);
     for (const k of KINDS) legend.appendChild(h('button', { class: 'lg', type: 'button', 'aria-pressed': String(S.kinds[k.id]), title: 'Show or hide ' + k.label, onclick: () => setState({ kinds: { ...S.kinds, [k.id]: !S.kinds[k.id] } }) },
       s('svg', { width: 11, height: 11, viewBox: '0 0 11 11', 'aria-hidden': 'true' }, marker(k.shape, 5.5, 5.5, 3.6, KC[k.id])), k.label, h('span', { class: 'c num' }, fmtN(byKind[k.id].length))));
-    if (S.range) legend.appendChild(h('button', { class: 'btn', type: 'button', style: { marginLeft: 'auto' }, onclick: () => setState({ range: null }) }, 'Clear time range · ' + fmtAt(S.range[0]) + ' – ' + fmtAt(S.range[1])));
+    const zb = h('span', { class: 'zoomctl', role: 'group', 'aria-label': 'Zoom the activity chart' },
+      h('button', { class: 'btn', type: 'button', 'aria-label': 'Zoom out', title: 'Zoom out', disabled: zoom <= 1, onclick: () => zoomTo(zoom / 1.6, centre()) }, '−'),
+      h('span', { class: 'zl', title: 'Current zoom' }, zoom < 10 ? '×' + zoom.toFixed(1) : '×' + Math.round(zoom)),
+      h('button', { class: 'btn', type: 'button', 'aria-label': 'Zoom in', title: 'Zoom in (Ctrl + wheel)', disabled: zoom >= ZMAX, onclick: () => zoomTo(zoom * 1.6, centre()) }, '+'),
+      S.range ? h('button', { class: 'btn', type: 'button', title: 'Zoom to the selected time range', onclick: () => { const span = Math.max(1, S.range[1] - S.range[0]); zoom = clampZ(DUR / (span * 1.1)); draw(); scroller.scrollLeft = Math.max(0, ML + (S.range[0] / DUR) * geom.pw0 * zoom - 0.05 * scroller.clientWidth); } }, 'Zoom to selection') : null,
+      h('button', { class: 'btn', type: 'button', title: 'Show the whole run', disabled: zoom <= 1, onclick: () => { zoom = 1; draw(); scroller.scrollLeft = 0; } }, 'Fit'));
+    legend.appendChild(h('span', { style: { marginLeft: 'auto', display: 'inline-flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, S.range ? h('button', { class: 'btn', type: 'button', onclick: () => setState({ range: null }) }, 'Clear time range · ' + fmtAt(S.range[0]) + ' – ' + fmtAt(S.range[1])) : null, zb));
     const fnd = DATA.findings.filter(f => f.severity !== 'info' && f.t > 0 && f.events.length);
     const lanes = KINDS.filter(k => S.kinds[k.id] && byKind[k.id].length);
-    const W = Math.max(320, wrap.clientWidth || 800), LW = W < 560 ? 0 : 92, M = { l: LW + 8, r: 12, t: 6, b: 22 }, pw = W - M.l - M.r;
-    const FL = fnd.length ? 36 : 0, LH = 26, ph = FL + lanes.length * LH, H = M.t + ph + M.b, x = t => M.l + Math.min(1, Math.max(0, t / DUR)) * pw;
-    const svg = s('svg', { class: 'chart', width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': `Activity over time: one row per event kind${fnd.length ? ', with findings marked along the top' : ''}. Use the table view for the exact numbers.` });
+    const W = Math.max(320, wrap.clientWidth || 800), LW = W < 560 ? 0 : 96, VW = W - LW, pw0 = Math.max(200, VW - ML - MR), pw = pw0 * z, svgW = pw + ML + MR;
+    geom = { pw0 };
+    const FL = fnd.length ? 36 : 0, LH = 26, T = 6, B = 22, ph = FL + lanes.length * LH, H = T + ph + B, x = t => ML + Math.min(1, Math.max(0, t / DUR)) * pw;
+    // fixed label column
+    clear(labels); labels.setAttribute('width', LW); labels.setAttribute('height', H); labels.style.display = LW ? '' : 'none';
+    if (LW) {
+      if (FL) { labels.appendChild(s('text', { x: 10, y: T + FL / 2 + 3.5, class: 'lane-label' }, 'Findings')); labels.appendChild(s('text', { x: LW - 6, y: T + FL / 2 + 3.5, 'text-anchor': 'end', class: 'lane-count' }, fmtN(fnd.length))); }
+      lanes.forEach((k, i) => { const cy = T + FL + i * LH + LH / 2; labels.appendChild(marker(k.shape, 14, cy, 3.6, KC[k.id])); labels.appendChild(s('text', { x: 24, y: cy + 3.5, class: 'lane-label' }, k.label)); labels.appendChild(s('text', { x: LW - 6, y: cy + 3.5, 'text-anchor': 'end', class: 'lane-count' }, fmtN(byKind[k.id].length))); });
+    }
+    const svg = s('svg', { class: 'chart', width: svgW, height: H, viewBox: `0 0 ${svgW} ${H}`, role: 'img', 'aria-label': `Activity over time: one row per event kind${fnd.length ? ', with findings marked along the top' : ''}${z > 1 ? ', zoomed to ' + z.toFixed(1) + ' times' : ''}. Use the table view for the exact numbers.` });
     const ax = s('g', { class: 'axis' });
-    for (const t of timeTicks(0, DUR, Math.max(3, Math.floor(pw / 90)))) { ax.appendChild(s('line', { x1: x(t), x2: x(t), y1: M.t, y2: M.t + ph, class: 'gridline' })); ax.appendChild(s('text', { x: x(t), y: H - 6, 'text-anchor': 'middle' }, tickLabel(t, DUR))); }
+    const ticks = timeTicks(0, DUR, Math.max(3, Math.floor(pw / 90))), step = ticks.length > 1 ? ticks[1] - ticks[0] : DUR;
+    for (const t of ticks) { ax.appendChild(s('line', { x1: x(t), x2: x(t), y1: T, y2: T + ph, class: 'gridline' })); ax.appendChild(s('text', { x: x(t), y: H - 6, 'text-anchor': 'middle' }, tickText(t, step))); }
     svg.appendChild(ax);
-    const laneTop = i => M.t + FL + i * LH;
     lanes.forEach((k, i) => {
-      const y0 = laneTop(i), cy = y0 + LH / 2, list = byKind[k.id];
-      svg.appendChild(s('line', { x1: M.l, x2: W - M.r, y1: y0 + LH, y2: y0 + LH, class: 'gridline' }));
-      if (LW) {
-        svg.appendChild(s('g', null, marker(k.shape, 8, cy, 3.6, KC[k.id])));
-        svg.appendChild(s('text', { x: 18, y: cy + 3.5, class: 'lane-label' }, k.label));
-        svg.appendChild(s('text', { x: LW, y: cy + 3.5, 'text-anchor': 'end', class: 'lane-count' }, fmtN(list.length)));
-      }
+      const y0 = T + FL + i * LH, cy = y0 + LH / 2, list = byKind[k.id];
+      svg.appendChild(s('line', { x1: 0, x2: svgW, y1: y0 + LH, y2: y0 + LH, class: 'gridline' }));
       if (list.length <= pw / 2.4) for (const e of list) svg.appendChild(marker(k.shape, x(e.t), cy, 3.6, KC[k.id]));
       else {   // too many to mark one by one: a density strip, 3px columns whose height says how many fall in each
         const cols = Math.max(1, Math.floor(pw / 3)), cnt = new Array(cols).fill(0); for (const e of list) cnt[Math.min(cols - 1, Math.floor(e.t / DUR * cols))]++;
         const mx = Math.max(...cnt);
-        cnt.forEach((c, j) => { if (c) { const hh = Math.max(3, (LH - 8) * Math.pow(c / mx, 0.6)); svg.appendChild(s('rect', { x: M.l + j * 3, y: cy - hh / 2, width: 2, height: hh, rx: 1, fill: KC[k.id] })); } });
+        cnt.forEach((c, j) => { if (c) { const hh = Math.max(3, (LH - 8) * Math.pow(c / mx, 0.6)); svg.appendChild(s('rect', { x: ML + j * 3, y: cy - hh / 2, width: 2, height: hh, rx: 1, fill: KC[k.id] })); } });
       }
     });
-    if (FL) {   // findings: the same glyphs as the severity pills (x = high, warning triangle = medium/low), with a faint stem down through every lane
-      svg.appendChild(s('line', { x1: M.l, x2: W - M.r, y1: M.t + FL, y2: M.t + FL, class: 'gridline' }));
-      if (LW) svg.appendChild(s('text', { x: 18, y: M.t + FL / 2 + 3.5, class: 'lane-label' }, 'Findings'));
-      if (LW) svg.appendChild(s('text', { x: LW, y: M.t + FL / 2 + 3.5, 'text-anchor': 'end', class: 'lane-count' }, fmtN(fnd.length)));
+    if (FL) {   // findings: the same glyphs as the severity pills, with a faint stem down through every lane
+      svg.appendChild(s('line', { x1: 0, x2: svgW, y1: T + FL, y2: T + FL, class: 'gridline' }));
       for (const f of fnd) {
-        const fx = x(f.t), g = icon(SEVICON[f.severity], 15); g.setAttribute('x', fx - 7.5); g.setAttribute('y', M.t + FL / 2 - 7.5); g.style.color = SEVC[f.severity]; g.style.fill = cssv('--surface');
-        svg.appendChild(s('line', { x1: fx, x2: fx, y1: M.t + FL - 4, y2: M.t + ph, stroke: SEVC[f.severity], 'stroke-width': 1, 'stroke-dasharray': f.severity === 'high' ? '' : '3 3', opacity: 0.35, 'pointer-events': 'none' }));
+        const fx = x(f.t), g = icon(SEVICON[f.severity], 15); g.setAttribute('x', fx - 7.5); g.setAttribute('y', T + FL / 2 - 7.5); g.style.color = SEVC[f.severity]; g.style.fill = cssv('--surface');
+        svg.appendChild(s('line', { x1: fx, x2: fx, y1: T + FL - 4, y2: T + ph, stroke: SEVC[f.severity], 'stroke-width': 1, 'stroke-dasharray': f.severity === 'high' ? '' : '3 3', opacity: 0.35, 'pointer-events': 'none' }));
         svg.appendChild(g);
       }
     }
     if (DATA.integrity.untrusted_after_mono) {
-      const ux = x(untrustedAt()), nearEdge = ux > W - M.r - 90;
-      svg.appendChild(s('rect', { x: ux, y: M.t, width: Math.max(0, W - M.r - ux), height: ph, fill: ink(0.07), 'pointer-events': 'none' }));
-      svg.appendChild(s('line', { x1: ux, x2: ux, y1: M.t, y2: M.t + ph, stroke: cssv('--critical'), 'stroke-width': 1.5, 'pointer-events': 'none' }));
-      svg.appendChild(s('text', { x: nearEdge ? ux - 6 : ux + 6, y: M.t + 12, 'text-anchor': nearEdge ? 'end' : 'start', fill: cssv('--t-critical'), 'font-size': 10.5, 'font-weight': 700, 'pointer-events': 'none' }, 'UNTRUSTED'));
+      const ux = x(untrustedAt());
+      svg.appendChild(s('rect', { x: ux, y: T, width: Math.max(0, svgW - MR - ux), height: ph, fill: ink(0.07), 'pointer-events': 'none' }));
+      svg.appendChild(s('line', { x1: ux, x2: ux, y1: T, y2: T + ph, stroke: cssv('--critical'), 'stroke-width': 1.5, 'pointer-events': 'none' }));
+      svg.appendChild(s('text', { x: ux + 6, y: T + 12, fill: cssv('--t-critical'), 'font-size': 10.5, 'font-weight': 700, 'pointer-events': 'none' }, 'UNTRUSTED'));
     }
-    const cross = s('line', { y1: M.t, y2: M.t + ph, stroke: ink(0.35), 'stroke-width': 1, display: 'none', 'pointer-events': 'none' });
-    const sel = s('rect', { y: M.t, height: ph, class: 'brush-sel', display: S.range ? '' : 'none', 'pointer-events': 'none' });
+    const cross = s('line', { y1: T, y2: T + ph, stroke: ink(0.35), 'stroke-width': 1, display: 'none', 'pointer-events': 'none' });
+    const sel = s('rect', { y: T, height: ph, class: 'brush-sel', display: S.range ? '' : 'none', 'pointer-events': 'none' });
     if (S.range) { sel.setAttribute('x', x(S.range[0])); sel.setAttribute('width', Math.max(2, x(S.range[1]) - x(S.range[0]))); }
     svg.appendChild(cross); svg.appendChild(sel);
-    const hit = s('rect', { x: M.l, y: M.t, width: pw, height: ph, fill: 'transparent', style: { cursor: 'crosshair' } });
-    const tAt = ev => { const r = svg.getBoundingClientRect(); return Math.max(0, Math.min(DUR, ((ev.clientX - r.left - M.l) / pw) * DUR)); };
+    const hit = s('rect', { x: ML, y: T, width: pw, height: ph, fill: 'transparent', style: { cursor: 'crosshair' } });
+    const tAt = ev => { const r = svg.getBoundingClientRect(); return Math.max(0, Math.min(DUR, ((ev.clientX - r.left - ML) / pw) * DUR)); };
     const near = (list, t, px) => list.filter(e => Math.abs(x(e.t) - x(t)) <= px);
-    const findingAt = ev => { const r = svg.getBoundingClientRect(), y = ev.clientY - r.top; return (FL && y < M.t + FL) ? near(fnd, tAt(ev), 9) : []; };
+    const findingAt = ev => { const r = svg.getBoundingClientRect(), y = ev.clientY - r.top; return (FL && y < T + FL) ? near(fnd, tAt(ev), 9) : []; };
     let drag = null;
     hit.addEventListener('pointermove', ev => {
       const t = tAt(ev), cx = x(t), r = svg.getBoundingClientRect(), y = ev.clientY - r.top;
       cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('display', '');
-      if (drag !== null) { const a = Math.min(drag, t), z = Math.max(drag, t); sel.setAttribute('display', ''); sel.setAttribute('x', x(a)); sel.setAttribute('width', Math.max(2, x(z) - x(a))); }
-      const li = Math.floor((y - M.t - FL) / LH), kind = li >= 0 ? lanes[li] : null, rows = [];
-      if (FL && y < M.t + FL) for (const f of near(fnd, t, 9).slice(0, 4)) rows.push(h('div', { class: 'tk' }, h('span', { class: 'tv' }, f.severity.toUpperCase()), h('span', { class: 'tl' }, short(f.title, 70))));
+      if (drag !== null) { const a = Math.min(drag, t), zz = Math.max(drag, t); sel.setAttribute('display', ''); sel.setAttribute('x', x(a)); sel.setAttribute('width', Math.max(2, x(zz) - x(a))); }
+      const li = Math.floor((y - T - FL) / LH), kind = li >= 0 ? lanes[li] : null, rows = [];
+      if (FL && y < T + FL) for (const f of near(fnd, t, 9).slice(0, 4)) rows.push(h('div', { class: 'tk' }, h('span', { class: 'tv' }, f.severity.toUpperCase()), h('span', { class: 'tl' }, short(f.title, 70))));
       else if (kind) { const hits = near(byKind[kind.id], t, 5); for (const e of hits.slice(0, 4)) rows.push(h('div', { class: 'tk' }, h('span', { class: 'tv num' }, fmtAt(e.t)), h('span', { class: 'tl' }, short(e.title, 70)))); if (hits.length > 4) rows.push(h('div', { class: 'tl' }, '+' + (hits.length - 4) + ' more here')); }
       showTip(ev.clientX, ev.clientY, [h('div', { class: 'tl' }, fmtAt(t) + (kind ? ' · ' + kind.label : '')), ...rows]);
     });
     hit.addEventListener('pointerleave', () => { cross.setAttribute('display', 'none'); hideTip(); });
     hit.addEventListener('pointerdown', ev => { hit.setPointerCapture(ev.pointerId); drag = tAt(ev); });
     hit.addEventListener('pointerup', ev => {
-      const a = Math.min(drag, tAt(ev)), z = Math.max(drag, tAt(ev)); drag = null;
-      if (x(z) - x(a) > 4) setState({ range: [a, z] });
+      const a = Math.min(drag, tAt(ev)), zz = Math.max(drag, tAt(ev)); drag = null;
+      if (x(zz) - x(a) > 4) setState({ range: [a, zz] });
       else { const f = findingAt(ev)[0]; if (f) setState({ sel: { type: 'finding', id: f.id } }); else if (S.range) setState({ range: null }); }   // a click on a finding's mark opens it
     });
     svg.appendChild(hit);
-    clear(holder).appendChild(svg);
+    const keep = scroller.scrollLeft;
+    clear(scroller).appendChild(svg); scroller.scrollLeft = keep;
   }
+  scroller.addEventListener('wheel', ev => {   // Ctrl/Cmd + wheel (and a trackpad pinch, which arrives as Ctrl + wheel) zooms around the pointer; a plain wheel still scrolls the page
+    if (!(ev.ctrlKey || ev.metaKey)) return;
+    ev.preventDefault(); zoomTo(zoom * Math.exp(-ev.deltaY * 0.0025), ev.clientX - scroller.getBoundingClientRect().left);
+  }, { passive: false });
+  scroller.addEventListener('keydown', ev => {
+    if (ev.target !== scroller || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (ev.key === '+' || ev.key === '=') { ev.preventDefault(); zoomTo(zoom * 1.6, centre()); } else if (ev.key === '-') { ev.preventDefault(); zoomTo(zoom / 1.6, centre()); }
+  });
   wrap.redraw = draw;
   new ResizeObserver(() => { if (wrap.isConnected && wrap.clientWidth) draw(); }).observe(wrap);
   onState(() => { if (wrap.isConnected) draw(); });

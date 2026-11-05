@@ -65,7 +65,7 @@ function intTicks(max, n) {                 // y ticks for COUNTS: whole numbers
   return out;
 }
 function timeTicks(d0, d1, n) {            // nice ticks in ns for a time axis
-  const span = Math.max(1, d1 - d0), units = [1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 2e9, 5e9, 1e10, 3e10, 6e10, 3e11, 6e11];
+  const span = Math.max(1, d1 - d0), units = [1e3, 2e3, 5e3, 1e4, 2e4, 5e4, 1e5, 2e5, 5e5, 1e6, 2e6, 5e6, 1e7, 2e7, 5e7, 1e8, 2e8, 5e8, 1e9, 2e9, 5e9, 1e10, 3e10, 6e10, 3e11, 6e11];   // 1-2-5 at every scale, so a zoomed axis stays fine
   let step = units.find(u => span / u <= n) || units[units.length - 1];
   const out = []; for (let v = Math.ceil(d0 / step) * step; v <= d1; v += step) out.push(v);
   return out;
