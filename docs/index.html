@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-2GMlZ2Tcg7N5O2VQaZPCh7Ry'; img-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="color-scheme" content="dark light">
+<title>tracewatch: example reports</title>
+<style nonce="2GMlZ2Tcg7N5O2VQaZPCh7Ry">
+:root {
+  color-scheme: dark;
+  --page: #0a0d12; --surface: #10151c; --raised: #161c25; --raised-2: #1c2330;
+  --hover: rgba(255,255,255,.045); --line: rgba(255,255,255,.075); --line-2: rgba(255,255,255,.14);
+  --text: #e8ecf1; --text-2: #a9b2bf; --text-3: #838f9e; --faint: #5b6572;
+  --brand: #ff3b47; --accent: #3987e5;
+  --k-exec: #3987e5; --k-http: #d95926; --k-net: #199e70; --k-file: #c98500; --k-dns: #d55181; --k-ws: #008300; --k-sys: #9085e9;
+  --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
+  --sev-info: #7d8896; --sev-low: var(--warning); --sev-medium: var(--serious); --sev-high: var(--critical);
+  --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+
+  --scrim: rgba(0,0,0,.5);
+  --ink-rgb: 255,255,255; --sel: #ffffff; --edge-hl: rgba(160,200,255,.85); --float-bg: rgba(16,21,28,.92);
+  --scroll: #262e3b; --scroll-h: #333d4e; --on-badge: #0b0b0b;
+  --t-good: #5fd35f; --t-warning: #fab219; --t-serious: #ec835a; --t-critical: #ff8585;
+  --shadow-card: 0 1px 0 rgba(255,255,255,.03) inset, 0 8px 24px rgba(0,0,0,.25);
+  --shadow-drawer: -24px 0 60px rgba(0,0,0,.55); --shadow-tip: 0 12px 32px rgba(0,0,0,.5);
+  --glow-a: rgba(57,135,229,.07); --glow-b: rgba(255,59,71,.05);
+  --radius: 10px; --rail: 76px; --top: 56px;
+}
+@media (prefers-color-scheme: light) {
+:root {
+  color-scheme: light;
+  --page: #f3f4f6; --surface: #fcfcfb; --raised: #ffffff; --raised-2: #eef0f3;
+  --hover: rgba(11,11,11,.05); --line: rgba(11,11,11,.11); --line-2: rgba(11,11,11,.2);
+  --text: #0b0b0b; --text-2: #454650; --text-3: #5f6470; --faint: #9aa0aa;
+  --brand: #e5313c; --accent: #2a78d6;
+  --k-exec: #2a78d6; --k-http: #eb6834; --k-net: #1baf7a; --k-file: #eda100; --k-dns: #e87ba4; --k-ws: #008300; --k-sys: #6250d6;
+  --sev-info: #6b7280;
+  --scrim: rgba(20,30,50,.36);
+  --ink-rgb: 11,11,11; --sel: #0b0b0b; --edge-hl: #2a78d6; --float-bg: rgba(252,252,251,.94);
+  --scroll: #c9ccd3; --scroll-h: #aeb3bd; --on-badge: #0b0b0b;
+  --t-good: #00700f; --t-warning: #8a5a00; --t-serious: #b4400f; --t-critical: #b02323;
+  --shadow-card: 0 1px 2px rgba(20,30,50,.06), 0 6px 18px rgba(20,30,50,.07);
+  --shadow-drawer: -16px 0 40px rgba(20,30,50,.16); --shadow-tip: 0 10px 28px rgba(20,30,50,.18);
+  --glow-a: rgba(42,120,214,.07); --glow-b: rgba(229,49,60,.05);
+}
+}
+
+body { margin: 0; background: var(--page); color: var(--text); font: 15px/1.55 var(--font); }
+main { max-width: 1040px; margin: 0 auto; padding: 36px 20px 64px; }
+h1 { font-size: 28px; margin: 0 0 6px; letter-spacing: -.01em; } h2 { font-size: 17px; margin: 0 0 6px; }
+.lede { color: var(--text-2); max-width: 720px; margin: 0 0 22px; }
+.hero { width: 100%; border: 1px solid var(--line-2); border-radius: var(--radius); display: block; margin: 0 0 26px; }
+.grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 14px; }
+.card { background: var(--raised); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; box-shadow: var(--shadow-card); }
+.card p { margin: 0 0 10px; color: var(--text-2); } .try { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--text-3); margin-top: 10px; }
+.card ul { margin: 4px 0 12px; padding-left: 18px; color: var(--text-2); } .links { display: flex; gap: 8px; flex-wrap: wrap; margin: 0; }
+a { color: var(--accent); } a.open { display: inline-block; padding: 5px 12px; border: 1px solid var(--line-2); border-radius: 8px; text-decoration: none; color: var(--text); font-weight: 600; }
+a.open:hover { background: var(--hover); } a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.note { color: var(--text-3); font-size: 13px; margin-top: 26px; max-width: 760px; }
+</style>
+</head>
+<body>
+<main>
+<h1>tracewatch</h1>
+<p class="lede">An experiment: run a command under a Linux process tracer and an intercepting HTTPS proxy, then turn the recording into a
+report you can click around in. These are real reports from example runs. Each is a single self-contained HTML file with no external requests.
+Everything below is from sanitized copies: paths, names and IP addresses are placeholders.</p>
+<img class="hero" src="screenshots/sim-overview-dark.png" alt="The Overview of the simulated-intruder report: a summary, a ribbon of notable steps, and zoomable swim lanes of activity">
+<div class="grid">
+<article class="card"><h2>Scripted demo</h2><p>A scripted workload against local servers: findings of every severity, a connection that bypassed the proxy, websockets, secrets that were redacted, and a dropped binary.</p><div class="try">Things to try</div><ul><li>Start on the Overview: the summary, then the ribbon of notable steps.</li><li>Open Process tree (3) and click a node.</li><li>Open Findings (2) and expand “About this rule” on any card.</li></ul><p class="links"><a class="open" href="examples/demo.html">Open the report</a></p></article><article class="card"><h2>A simulated intruder</h2><p>A harmless, local-only simulation of an attacker’s session: decoy credential theft, a reverse-shell-shaped command to a loopback listener, obfuscated payloads that only echo, curl | sh, and a process posing as a system daemon.</p><div class="try">Things to try</div><ul><li>Findings (2): open the reverse-shell finding, then “Rule reference” at the bottom.</li><li>Overview: hold Ctrl and scroll over the activity lanes to zoom.</li><li>Click a mark in the Findings lane to open it.</li></ul><p class="links"><a class="open" href="examples/simulation.html">Open the report</a></p></article><article class="card"><h2>A real internet session</h2><p>git, curl and python talking to real public services (GitHub, httpbin, example.com and example.org), recorded and reported.</p><div class="try">Things to try</div><ul><li>Network (7) and HTTP (8): which process talked to whom.</li><li>Run (no key): how the recording was made and what can be trusted.</li></ul><p class="links"><a class="open" href="examples/showcase.html">Open the report</a> <a class="open" href="https://github.com/andrewbrooks/tracewatch/blob/main/docs/examples/showcase.md">Flat Markdown version</a></p></article><article class="card"><h2>Who sent that request?</h2><p>One connection held by several processes (a parent and children that inherit it). The report names the process that sent each request, not just the one that opened the connection.</p><div class="try">Things to try</div><ul><li>HTTP (8): open the /s1 request and look at “Connection opened by”.</li></ul><p class="links"><a class="open" href="examples/shared_socket.html">Open the report</a></p></article><article class="card"><h2>HTTP/2, compression and a refused certificate</h2><p>HTTP/2 multiplexing, gzip/deflate/brotli/zstd bodies with their secrets redacted, a client that refused the recorder’s certificate, and a connection around the proxy.</p><div class="try">Things to try</div><ul><li>HTTP (8): six streams on one connection.</li><li>Findings (2): the finding for the client that refused the certificate.</li></ul><p class="links"><a class="open" href="examples/protocols.html">Open the report</a></p></article><article class="card"><h2>Comparing two runs</h2><p>What behaved differently between the scripted demo run and the simulated-intruder run, as produced by tracewatch diff.</p><div class="try">Things to try</div><ul><li>Read “What changed” first, then open each section.</li></ul><p class="links"><a class="open" href="examples/diff.html">Open the diff</a></p></article>
+</div>
+<p class="note">The reports follow your system’s light or dark setting (the button at the top right overrides it). Press <b>?</b> inside a report for keyboard shortcuts.
+Findings are heuristics for a human to judge, not verdicts. Source and documentation: <a href="https://github.com/andrewbrooks/tracewatch">https://github.com/andrewbrooks/tracewatch</a>.</p>
+</main>
+</body>
+</html>
