@@ -1,0 +1,38 @@
+# Lint, unit tests, and the parts of the browser suite that do not need Docker or kernel tracing.
+# The integration scripts (tests/integration/*.sh) record real processes under a privileged Tracee container and are
+# run by hand; they are intentionally not part of CI.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run pytest -q
+
+  browser:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv sync --locked
+      - run: uv run playwright install --with-deps ${{ matrix.browser }}
+      # Without a demo recording the suite runs its synthetic-data checks only (edge cases, hostile data, big report).
+      - run: uv run python tests/browser/run.py
+        env:
+          TW_BROWSER: ${{ matrix.browser }}
