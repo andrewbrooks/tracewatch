@@ -216,9 +216,14 @@ class Redactor:
             except ValueError:
                 return self.text(text)
         if "x-www-form-urlencoded" in ct:
+            # A body labelled "form" is not necessarily a form (curl --data-binary @key.pem says so by default). Parsing
+            # it splits a raw PEM into a "key" that was never redacted and re-encodes it, which also defeats the
+            # multi-line private-key pattern: so PEM blocks go first, and keys are redacted like values.
+            text = _PRIVATE_KEY.sub(lambda m: self.tag("private-key", m.group(0)), text)
             pairs = parse_qsl(text, keep_blank_values=True)
             return "&".join(
-                f"{quote_plus(k)}={quote_plus(self.tag('form', v) if name_is_sensitive(k) and v else self.text(v))}"
+                f"{quote_plus(self.text(k))}="
+                + quote_plus(self.tag("form", v) if name_is_sensitive(k) and v else self.text(v))
                 for k, v in pairs
             )
         return self.text(text)

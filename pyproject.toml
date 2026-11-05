@@ -35,7 +35,10 @@ select = ["E", "F", "I", "UP", "B"]
 "src/tracewatch/report_md.py" = ["E501"]  # table-building expressions
 "src/tracewatch/report_html.py" = ["E501"]  # the HTML template
 "src/tracewatch/diff_html.py" = ["E501"]  # the HTML template
+"src/tracewatch/findings_catalog.py" = ["E501"]  # prose entries
 "tests/test_model.py" = ["E501"]  # dense fixture literals
+"tests/test_findings_rules.py" = ["E501"]  # command-line fixtures
+"tests/test_redact.py" = ["E501"]  # secret-shaped fixtures
 "tests/browser/*.py" = ["E501", "UP031"]  # long JS snippets and payload literals
 
 [tool.pytest.ini_options]

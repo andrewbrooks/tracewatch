@@ -156,6 +156,22 @@ def test_form_body(r):
     assert "user=bob" in out
 
 
+PEM = "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQ\n-----END OPENSSH PRIVATE KEY-----\n"  # fmt: skip
+
+
+def test_a_raw_private_key_posted_as_a_form_is_redacted(r):
+    """curl --data-binary @id_rsa labels the body x-www-form-urlencoded: parsing it must not leak the PEM."""
+    for body in (PEM, "note=hi&" + PEM, PEM + "&user=bob"):
+        out = r.body_text("application/x-www-form-urlencoded", body)
+        gone(out, "b3BlbnNzaC1rZXktdjE", "BEGIN+OPENSSH", "AAAABG5vbmU")
+        assert "REDACTED:private-key" in out.replace("%5B", "[").replace("%3A", ":")
+
+
+def test_a_secret_in_the_key_position_of_a_form_is_redacted(r):
+    out = r.body_text("application/x-www-form-urlencoded", "Bearer abcdefghijklmnopqrstuvwxyz0123456789")
+    gone(out, "abcdefghijklmnopqrstuvwxyz0123456789")
+
+
 def test_truncation_happens_after_redaction(r):
     secret = SECRETS["sk"]
     text = "x" * 89 + " " + secret + "y" * 50

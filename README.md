@@ -36,8 +36,10 @@ For the command you launch (and everything it starts) it records:
 - **network activity**: HTTP(S) requests and responses through the proxy (including HTTP/2 and websockets),
   which process sent each one, DNS lookups the proxy performed, and TCP connections that bypassed the proxy
 - **file activity** for a short watch list (credential stores, temp directories), not every file open
-- a handful of rule-based **findings** (e.g. "wrote a file, then executed it", "credential sent over plain HTTP"),
-  each pointing at the events that triggered it
+- about 25 rule-based **findings** (e.g. "wrote a file, then executed it", "credential sent over plain HTTP"),
+  each pointing at the events that triggered it. Every rule has an entry in a built-in dictionary (what it means, what it
+  cannot tell you, what benign activity looks the same, and whether it has ever fired on a real recording), shown in the
+  report. The severities are rough heuristics, not measurements
 
 The interactive report is a single self-contained HTML file (no network access, dark and light themes, keyboard
 navigation, prints reasonably). The Markdown report is the same information as a flat file.

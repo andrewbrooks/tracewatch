@@ -168,6 +168,14 @@ function eventsView() {
   return root;
 }
 
+function ruleReference() {   // the whole finding dictionary, with how many times each rule fired in THIS run
+  const cat = DATA.catalog || {}, fired = {}; for (const f of DATA.findings) fired[f.rule] = (fired[f.rule] || 0) + 1;
+  const ids = Object.keys(cat).sort((a, b) => (fired[b] ? 1 : 0) - (fired[a] ? 1 : 0) || cat[a].category.localeCompare(cat[b].category) || a.localeCompare(b));
+  return h('details', { class: 'refrules' }, h('summary', null, 'Rule reference · ' + ids.length + ' rules, ' + Object.keys(fired).length + ' fired in this run'),
+    h('p', { class: 'muted' }, 'What each rule means, what it cannot tell you, and how much real-world evidence stands behind it. Severities are heuristic estimates, not measurements.'),
+    ...ids.map(id => { const c = cat[id]; return h('div', { class: 'refrule' }, h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, h('strong', null, c.title), h('span', { class: 'rule' }, id), h('span', { class: 'rstat ' + c.status }, (STATUS_TEXT[c.status] || [c.status])[0]), fired[id] ? h('span', { class: 'sev sev-medium' }, 'fired ×' + fired[id]) : null),
+      h('p', { style: { margin: '4px 0', color: 'var(--text-2)' } }, c.meaning), h('p', { class: 'muted', style: { margin: '2px 0' } }, 'Cannot tell: ' + c.cannot_know), h('p', { class: 'muted', style: { margin: '2px 0' } }, 'Often benign: ' + c.benign.join('; ')), h('p', { class: 'muted', style: { margin: '2px 0 0' } }, 'Check: ' + c.check)); }));
+}
 function findingsView() {
   const f = { sev: new Set(['high', 'medium', 'low', 'info']) }, list = h('div', null);
   const chips = h('div', { class: 'legend' });
@@ -177,7 +185,7 @@ function findingsView() {
     if (!shown.length) list.appendChild(h('div', { class: 'empty' }, DATA.findings.length ? 'No findings match the filters.' : 'No indicators fired for this run.'));
     for (const x of shown) list.appendChild(h('div', { style: { cursor: 'pointer' }, onclick: ev => { if (!ev.target.closest('button,.ev-item')) setState({ sel: { type: 'finding', id: x.id } }); } }, findingCard(x)));
   };
-  const root = viewShell('findings', 'Findings', 'Indicators derived from what was recorded. Each one cites its evidence. They are for a human to judge: a rule firing means "look here", not "this is malicious".', chips, h('div', { style: { height: '10px' } }), list);
+  const root = viewShell('findings', 'Findings', 'Indicators derived from what was recorded. Each one cites its evidence. They are for a human to judge: a rule firing means "look here", not "this is malicious".', chips, h('div', { style: { height: '10px' } }), list, ruleReference());
   root.onShow = draw; onState(() => { if (root.classList.contains('on')) draw(); });
   return root;
 }

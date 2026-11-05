@@ -93,10 +93,24 @@ function httpDrawer(x) {
         h('div', { class: 'ev-list', style: { marginTop: '8px', maxHeight: '320px', overflow: 'auto' } }, (w.log || []).slice(0, 300).map(m => h('div', { class: 'ev-item', style: { gridTemplateColumns: '38px 14px 1fr', cursor: 'default' } }, h('span', { class: 'tt2' }, m.dir === 'c2s' ? '→ out' : '← in'), h('span', { class: 'muted' }, m.opcode === 'binary' ? 'B' : 'T'), h('span', { class: 'mono', style: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, m.body.captured ? short(oneLine(m.body.text), 160) : `(${fmtB(m.body.size)} · ${m.body.reason})`))))) : null),
   ];
 }
+const STATUS_TEXT = { observed: ['OBSERVED', 'Fired on at least one real recording made by this project.'], synthetic: ['SYNTHETIC ONLY', 'Implemented and unit-tested on fabricated events; never seen on a real run. Treat with extra scepticism.'] };
+function ruleStatus(c) {
+  if (!c) return null;
+  const [t, d] = STATUS_TEXT[c.status] || [c.status, ''];
+  return h('div', { style: { margin: '6px 0' } }, h('span', { class: 'rstat ' + c.status, title: d }, t), h('span', { class: 'muted', style: { marginLeft: '8px' } }, d), c.note ? h('p', { class: 'muted', style: { margin: '4px 0 0' } }, c.note) : null);
+}
+function ruleAbout(c) {   // the catalog entry: what it cannot tell you, what benign activity looks the same, how to check
+  if (!c) return null;
+  return section('About this rule', h('p', { style: { margin: '0 0 6px', color: 'var(--text-2)' } }, c.meaning),
+    h('div', { class: 'k2' }, 'It cannot tell you'), h('p', { style: { margin: '2px 0 8px', color: 'var(--text-2)' } }, c.cannot_know),
+    h('div', { class: 'k2' }, 'Often benign when'), h('ul', { style: { margin: '2px 0 8px', paddingLeft: '18px', color: 'var(--text-2)' } }, ...c.benign.map(b => h('li', null, b))),
+    h('div', { class: 'k2' }, 'How to check'), h('p', { style: { margin: '2px 0 0', color: 'var(--text-2)' } }, c.check));
+}
 function findingDrawer(f) {
   return [h('div', { class: 'dh' }, h('div', { class: 't' }, h('div', { class: 'k' }, 'Finding · ' + f.category), h('h3', null, f.title)), sevPill(f.severity), closeBtn()),
     h('div', { class: 'db' }, section('What this means', h('p', { style: { margin: 0, color: 'var(--text-2)' } }, f.why), f.detail ? h('p', { class: 'mono muted', style: { fontSize: '11.5px' } }, f.detail) : null),
-      section('Rule', h('span', { class: 'mono' }, f.rule), h('p', { class: 'muted', style: { marginBottom: 0 } }, 'Indicators are for a human to judge. A rule firing means "look here"; it cannot know your intent.')),
+      section('Rule', h('span', { class: 'mono' }, f.rule), ruleStatus((DATA.catalog || {})[f.rule]), h('p', { class: 'muted', style: { marginBottom: 0 } }, 'Indicators are for a human to judge. A rule firing means "look here"; it cannot know your intent.')),
+      ruleAbout((DATA.catalog || {})[f.rule]),
       f.events.length ? section('Evidence (' + f.events.length + ')', h('div', { class: 'ev-list' }, f.events.map(id => E.get(id)).filter(Boolean).slice(0, 80).map(evItem))) : null,
       f.procs.length ? section('Processes', f.procs.map(id => h('div', { style: { marginBottom: '8px' } }, chainNodes(id)))) : null)];
 }

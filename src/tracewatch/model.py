@@ -19,6 +19,7 @@ from pathlib import Path
 from . import __version__
 from . import tracee as tracee_cfg
 from .findings import find
+from .findings_catalog import CATALOG
 from .integrity import assess
 from .join import join_records, load
 
@@ -569,6 +570,9 @@ def build(run_dir: Path | str) -> dict:
         },
     }
     model["findings"] = find(model)
+    model["catalog"] = (
+        CATALOG  # the finding dictionary: what each rule means, its benign look-alikes, its evidence status
+    )
     sev_by_proc: dict[str, int] = {}
     order = {"info": 0, "low": 1, "medium": 2, "high": 3}
     for f in model["findings"]:

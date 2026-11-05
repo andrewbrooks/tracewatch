@@ -7,11 +7,16 @@ Severities: info < low < medium < high."""
 from __future__ import annotations
 
 import os
+import re
+
+from .findings_catalog import CATALOG
 
 SEV_ORDER = {"info": 0, "low": 1, "medium": 2, "high": 3}
 PER_RULE_CAP = 25  # a rule firing hundreds of times (bash -c) is summarised, not listed 500 times
 STAGING = ("/tmp/", "/var/tmp/", "/dev/shm/")
 CRED_CLIENTS = {
+    "sudo",
+    "visudo",
     "ssh",
     "ssh-add",
     "ssh-agent",
@@ -38,6 +43,59 @@ SHELLS = {"sh", "bash", "dash", "zsh", "ksh", "fish", "ash"}
 INTERPRETERS = {"python", "python3", "perl", "ruby", "node", "php", "lua"}
 CRASH_SIGNALS = {4, 6, 7, 8, 11}  # SIGILL SIGABRT SIGBUS SIGFPE SIGSEGV
 REDACT_MARK = "[REDACTED:"
+REDACT_MARK_URLENCODED = "%5BREDACTED%3A"
+
+# ---- behaviour rules over command lines (the six added with the finding catalog; see findings_catalog.py)
+_DL = r"(?:curl|wget|fetch|lwp-download|aria2c)"
+_SUDO = r"(?:sudo\s+(?:-\S+\s+)*)?(?:\S*/)?"
+_SH_SINK = _SUDO + r"(?:sh|bash|zsh|dash|ksh)(?:\s+-(?:s|l|e|x|ex|xe)\b[^|;&\n]*)?\s*(?:$|[|;&)\"'])"
+_IN_SINK = _SUDO + r"(?:python[\d.]*|perl|ruby|php|node)(?:\s+-)?\s*(?:$|[|;&)\"'])"  # reads the script from stdin
+PIPE_TO_SHELL = [
+    re.compile(rf"\b{_DL}\b[^|;&\n]*\|\s*(?:{_SH_SINK}|{_IN_SINK})"),
+    re.compile(rf"\b(?:sh|bash|zsh|dash|ksh)\s+<\(\s*{_DL}\b"),
+    re.compile(rf"-c\s+[\"']?\$\(\s*{_DL}\b"),
+]
+_SHELLISH = r"(?:ba|z|da|k)?sh"
+REVERSE_SHELL = [
+    re.compile(rf"\b{_SHELLISH}\s+-i\b[^\n]*(?:>&|<&|0>&1|/dev/(?:tcp|udp)/)"),
+    re.compile(r"/dev/(?:tcp|udp)/[\w.:\[\]-]+/\d+[^\n]*(?:0>&1|<&|>&)|(?:0>&1|<&|>&)[^\n]*/dev/(?:tcp|udp)/"),
+    re.compile(rf"\b(?:nc|ncat|netcat)\b[^\n|]*\s-[a-zA-Z]*[ec]\s*(?:\S*/)?{_SHELLISH}\b"),
+    re.compile(r"\bmkfifo\b[^\n]*\b(?:nc|ncat|netcat)\b"),
+    re.compile(r"\bsocat\b[^\n]*\b(?:exec|system):", re.I),
+    re.compile(
+        r"\b(?:python[\d.]*|perl|ruby|php)\b[^\n]*\bsocket\b[^\n]*(?:dup2|pty\.spawn|/bin/(?:ba)?sh|subprocess)", re.I
+    ),
+]
+_DEC = (
+    r"(?:base64_decode|gzinflate|gzuncompress|gzdecode|str_rot13|convert_uudecode|hex2bin|b64decode|decode_base64|atob)"
+)
+ENCODED = [
+    re.compile(
+        r"\bbase64\s+(?:-d|-D|--decode)\b[^\n]*\|\s*"
+        + _SUDO
+        + r"(?:sh|bash|zsh|dash|python[\d.]*|perl|ruby|php|node)\b"
+    ),
+    re.compile(r"\bxxd\s+-r\b[^\n]*\|\s*(?:sh|bash)\b"),
+    re.compile(
+        rf"\b(?:eval|assert|exec|system|passthru|shell_exec)\s*\(\s*@?\s*(?:__import__\(['\"]\w+['\"]\)\.|[\w.]*\.)?{_DEC}\s*\(",
+        re.I,
+    ),
+    re.compile(rf"\beval\s*\(\s*(?:\w+::)?{_DEC}\b", re.I),
+    re.compile(r"(?:\s-(?:enc|encodedcommand)\s|FromBase64String\()", re.I),
+]
+_OPAQUE = re.compile(r"^[A-Za-z0-9+/=_-]{160,}$")
+SYSTEM_NAMES = {
+    "sshd", "systemd", "systemd-journald", "systemd-logind", "cron", "crond", "bash", "sh", "dash", "zsh", "python3",
+    "python", "perl", "nginx", "apache2", "httpd", "dbus-daemon", "rsyslogd", "udevd", "init", "login", "getty",
+    "agetty", "ssh-agent", "gpg-agent", "dockerd", "containerd", "chronyd", "ntpd", "NetworkManager", "snapd", "cupsd",
+}  # fmt: skip
+SYSTEM_DIRS = ("/usr/", "/bin/", "/sbin/", "/lib/", "/lib64/", "/opt/", "/snap/", "/nix/", "/run/", "/etc/", "/proc/")
+PRIV_TOOLS = {"sudo", "su", "pkexec", "doas", "runuser"}
+SCAN_TOOLS = {
+    "nmap", "masscan", "zmap", "hping3", "nikto", "sqlmap", "hydra", "medusa", "gobuster", "ffuf", "dirb", "wfuzz",
+    "john", "hashcat", "responder", "chisel", "ngrok", "frpc", "frps", "proxychains", "proxychains4", "socat", "nc",
+    "ncat", "netcat",
+}  # fmt: skip
 
 
 def _has_redaction(h: dict) -> bool:
@@ -45,7 +103,8 @@ def _has_redaction(h: dict) -> bool:
         return True
     if any(REDACT_MARK in str(v) for _, v in h.get("req_headers") or []):
         return True
-    return REDACT_MARK in str((h.get("req_body") or {}).get("text") or "")
+    body = str((h.get("req_body") or {}).get("text") or "")
+    return REDACT_MARK in body or REDACT_MARK_URLENCODED in body  # form bodies carry their tags URL-encoded
 
 
 def find(model: dict) -> list[dict]:
@@ -299,6 +358,80 @@ def find(model: dict) -> list[dict]:
             "Only the first %d are listed individually." % PER_RULE_CAP,
             [e["id"] for e in inline[PER_RULE_CAP : PER_RULE_CAP + 50]],
         )
+
+    # ---- behaviour rules over command lines (see findings_catalog.py for what each one means and cannot know)
+    def why_of(rule: str) -> str:
+        c = CATALOG[rule]
+        return c[
+            "meaning"
+        ]  # what it cannot tell you, benign look-alikes and how to check are in the rule's catalog entry
+
+    def cmd_of(x: dict) -> str:
+        return " ".join(x["detail"].get("argv") or [])
+
+    def cap(rule: str, hits: list) -> list:
+        if len(hits) > PER_RULE_CAP:
+            add(
+                rule, "info", CATALOG[rule]["category"], f"... and {len(hits) - PER_RULE_CAP} more ({rule})",
+                "Only the first %d are listed individually." % PER_RULE_CAP, [h["id"] for h in hits[PER_RULE_CAP : PER_RULE_CAP + 50]],
+            )  # fmt: skip
+        return hits[:PER_RULE_CAP]
+
+    for x in cap("pipe-to-shell", [x for x in execs if any(r.search(cmd_of(x)) for r in PIPE_TO_SHELL)]):
+        add("pipe-to-shell", "medium", "execution", f"Download piped into an interpreter ({name_of(x['proc'])})",
+            why_of("pipe-to-shell"), [x["id"]], detail=cmd_of(x)[:200])  # fmt: skip
+    for x in cap("reverse-shell-shape", [x for x in execs if any(r.search(cmd_of(x)) for r in REVERSE_SHELL)]):
+        add("reverse-shell-shape", "high", "execution", f"Command line shaped like a reverse shell ({name_of(x['proc'])})",
+            why_of("reverse-shell-shape"), [x["id"]], detail=cmd_of(x)[:200])  # fmt: skip
+    enc = []
+    for x in execs:
+        c, argv = cmd_of(x), x["detail"].get("argv") or []
+        opaque = any(_OPAQUE.match(a) for a in argv[1:]) and any(f in argv[1:3] for f in ("-c", "-e", "-r", "-enc"))
+        if opaque or any(r.search(c) for r in ENCODED):
+            enc.append(x)
+    for x in cap("encoded-payload", enc):
+        add("encoded-payload", "medium", "evasion", f"Encoded code passed to an interpreter ({name_of(x['proc'])})",
+            why_of("encoded-payload"), [x["id"]], detail=cmd_of(x)[:200])  # fmt: skip
+    for x in cap("masquerade", [x for x in execs if _masquerade(x["detail"])]):
+        why, sev = _masquerade(x["detail"])
+        add("masquerade", sev, "evasion", f"{name_of(x['proc'])} pretends to be something else", why_of("masquerade") + " " + why,
+            [x["id"]], detail=cmd_of(x)[:200])  # fmt: skip
+    tool_procs: set[str] = set()
+    for x in execs:
+        nm = os.path.basename((x["detail"].get("argv") or [""])[0]).lstrip("-")
+        if nm in PRIV_TOOLS:
+            tool_procs.add(x["proc"])
+            root = procs.get(x["proc"], {}).get("uid") == 0
+            add("privilege-change", "medium" if root else "low", "privilege",
+                f"Privilege elevation {'gained' if root else 'attempted'}: {nm}", why_of("privilege-change"), [x["id"]], detail=cmd_of(x)[:200])  # fmt: skip
+    for x in execs:
+        p = procs.get(x["proc"])
+        par = procs.get(p["parent"]) if p and p.get("parent") else None
+        if not p or not par or x["proc"] in tool_procs or p.get("uid") != 0 or par.get("uid") in (0, None):
+            continue
+        anc, seen = par, set()
+        while anc and anc["id"] not in seen:  # the root child of a flagged sudo is the expected consequence
+            if anc["id"] in tool_procs:
+                break
+            seen.add(anc["id"])
+            anc = procs.get(anc["parent"]) if anc.get("parent") else None
+        if anc and anc["id"] in tool_procs:
+            continue
+        add("privilege-change", "medium", "privilege", f"Root process started by a non-root parent: {p['name']}",
+            why_of("privilege-change"), [x["id"]], detail=cmd_of(x)[:200])  # fmt: skip
+    scans = []
+    for x in execs:
+        argv = x["detail"].get("argv") or [""]
+        nm = os.path.basename(argv[0]).lstrip("-")
+        tun = nm == "ssh" and any(
+            a in ("-R", "-D", "-w") or (a[:2] in ("-R", "-D") and len(a) > 2 and a[2].isdigit()) for a in argv[1:]
+        )
+        if nm in SCAN_TOOLS or tun:
+            scans.append(x)
+    for x in cap("scanner-or-tunnel-tool", scans):
+        add("scanner-or-tunnel-tool", "medium", "network", f"Scanning or tunnelling tool run: {name_of(x['proc'])}",
+            why_of("scanner-or-tunnel-tool"), [x["id"]], detail=cmd_of(x)[:200])  # fmt: skip
+
     bad_exit = [e for e in events if e["kind"] == "exit" and e["detail"].get("code") not in (0, None)]
     if bad_exit:
         add(
@@ -356,6 +489,24 @@ def find(model: dict) -> list[dict]:
     for i, f in enumerate(out, 1):
         f["id"] = f"f{i}"
     return out
+
+
+def _masquerade(d: dict):
+    """(explanation, severity) when this exec looks like a program posing as another, else None."""
+    argv, exe = d.get("argv") or [], d.get("exe") or ""
+    if not argv or not exe:
+        return None
+    base, a0 = os.path.basename(exe), os.path.basename(argv[0]).lstrip("-")
+    if exe.startswith(STAGING) and base in SYSTEM_NAMES:
+        return f"{exe} runs from a temporary directory under the name of a system program.", "high"
+    if exe.startswith(SYSTEM_DIRS):
+        if re.fullmatch(r"\[[^\]]+\]", argv[0]):
+            return f"argv[0] is {argv[0]!r}, a kernel-thread style name, but this is {exe}.", "medium"
+        return None
+    norm = lambda n: re.sub(r"[\d.]+$", "", n)  # noqa: E731 - python3 / python3.12 / python are the same program
+    if a0 in SYSTEM_NAMES and norm(a0) != norm(base) and base != "busybox":
+        return f"argv[0] claims {a0!r} but the executable is {exe}.", "medium"
+    return None
 
 
 def _is_ip_literal(s: str) -> bool:
