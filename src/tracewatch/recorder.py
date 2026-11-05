@@ -42,6 +42,10 @@ class Options:
     upstream_ca: str | None = None
     name: str | None = None
     drain_s: float = 3.0
+    max_flows_bytes: int = 256 * 1024 * 1024  # hard: the proxy stops writing
+    soft_flows_bytes: int = 64 * 1024 * 1024  # soft: bodies are no longer stored
+    max_tracee_bytes: int = 256 * 1024 * 1024
+    body_cap: int = 8192  # stored characters per body, after redaction
     quiet: bool = False
 
 
@@ -60,6 +64,28 @@ def _wait_port(port: int, timeout: float) -> bool:
         except OSError:
             time.sleep(0.3)
     return False
+
+
+def last_records(path: Path, kinds: set[str], tail: int = 65536) -> dict[str, dict]:
+    """Newest record of each wanted kind in the last `tail` bytes of a JSONL file (the shutdown summaries)."""
+    import json
+
+    out: dict[str, dict] = {}
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - tail))
+            lines = f.read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("kind") in kinds:
+            out[r["kind"]] = r
+    return out
 
 
 def preflight() -> list[str]:
@@ -106,6 +132,12 @@ def record(o: Options) -> int:
         "recorder_pid": os.getpid(),
         "recorder_start_ticks": start_ticks(os.getpid()),
         "started": stamp(),
+        "limits": {
+            "max_flows_bytes": o.max_flows_bytes,
+            "soft_flows_bytes": o.soft_flows_bytes,
+            "max_tracee_bytes": o.max_tracee_bytes,
+            "body_cap_chars": o.body_cap,
+        },
         "lost_components": lost,
         "degraded": False,
         "versions": {"mitmproxy": mv.VERSION, "tracee": tracee.image_info()},
@@ -169,13 +201,23 @@ def record(o: Options) -> int:
         "flow_detail=0",  # mitm.log must not echo request URLs (they can carry secrets)
         "--set",
         "termlog_verbosity=warn",
+        "--set",
+        "stream_large_bodies=1m",  # huge request bodies are forwarded unbuffered (and not captured)
     ]
     if o.upstream_ca:
         mitm_cmd += ["--set", f"ssl_verify_upstream_trusted_ca={o.upstream_ca}"]
     mitm_cmd += ["-s", proxy_addon.__file__]
     procs["mitm"] = subprocess.Popen(
         mitm_cmd,
-        env=dict(os.environ, TW_FLOWS=str(run.p(FLOWS)), TW_REDACT_KEY=redactor.key.hex()),
+        env=dict(
+            os.environ,
+            TW_FLOWS=str(run.p(FLOWS)),
+            TW_REDACT_KEY=redactor.key.hex(),
+            TW_BODY_CAP=str(o.body_cap),
+            TW_SOFT_FLOWS_BYTES=str(o.soft_flows_bytes),
+            TW_MAX_FLOWS_BYTES=str(o.max_flows_bytes),
+            TW_FLAGS_DIR=str(run.p("flags")),
+        ),
         stdout=open(run.p(MITM_LOG), "ab"),
         stderr=subprocess.STDOUT,
     )
@@ -206,7 +248,13 @@ def record(o: Options) -> int:
     m["root_host_pid"] = hp
     run.p("flags/p1").touch()
     collector = tracee.Collector(
-        run.run_id, cname, tracee.scoped_args(hp), run.p(TRACEE), run.p(TRACEE_ERR), transform=redactor.tracee_line
+        run.run_id,
+        cname,
+        tracee.scoped_args(hp),
+        run.p(TRACEE),
+        run.p(TRACEE_ERR),
+        transform=redactor.tracee_line,
+        max_bytes=o.max_tracee_bytes,
     )
     collector.start()
     ev.emit("component_started", component="tracee", container=cname, host_pid=hp)
@@ -225,6 +273,22 @@ def record(o: Options) -> int:
     # --- supervise
     seq, last_hb, last_chk = 0, 0.0, 0.0
     forwarded = False
+    caps_hit: list[str] = []  # e.g. "proxy:soft", "proxy:hard", "tracee:hard": data was deliberately not kept
+    m["caps_hit"] = caps_hit
+
+    def note_caps() -> None:
+        found = [f"proxy:{lv}" for lv in ("soft", "hard") if run.p(f"flags/flows_{lv}_cap").exists()]
+        found += ["tracee:hard"] if collector.capped else []
+        for c in found:
+            if c not in caps_hit:
+                caps_hit.append(c)
+                ev.emit("cap_reached", cap=c)
+                run.write_manifest(m)
+                what = (
+                    "bodies are no longer stored" if c == "proxy:soft" else "nothing more is recorded for this source"
+                )
+                say(f"WARNING: size cap reached ({c}); {what}. The target keeps running.")
+
     while root.poll() is None:
         if flag["stop"] and not forwarded:
             forwarded = True
@@ -240,12 +304,14 @@ def record(o: Options) -> int:
                 lose("tracee", collector_error=collector.error)
             elif not collector.is_alive():
                 lose("tracee-collector", error=collector.error)
+        note_caps()
         if now - last_hb >= HEARTBEAT_S:
             last_hb, seq = now, seq + 1
             ev.emit(
                 "heartbeat",
                 seq=seq,
                 tracee_lines=collector.lines,
+                tracee_dropped=collector.dropped,
                 flows_bytes=run.p(FLOWS).stat().st_size if run.p(FLOWS).exists() else 0,
             )
         time.sleep(0.2)
@@ -266,14 +332,24 @@ def record(o: Options) -> int:
             procs["mitm"].wait(timeout=5)
         except subprocess.TimeoutExpired:
             procs["mitm"].kill()
+    note_caps()
+    summaries = last_records(run.p(FLOWS), {"redaction_summary", "cap_summary"})
     removed = run.remove_ca_private_material()
     ev.emit("ca_private_material_removed", files=removed)
+    m["caps"] = {
+        "proxy": summaries.get("cap_summary"),  # None if the proxy was killed before its shutdown hook ran
+        "tracee": {"capped": collector.capped, "lines_dropped": collector.dropped, "bytes_written": collector.written},
+    }
     m.update(
         status="interrupted" if flag["stop"] else "finished",
         ended=stamp(),
         root_returncode=rc,
         degraded=bool(lost),
-        redactions={"recorder": dict(redactor.counts), "tracee_lines_dropped": collector.redaction_failures},
+        redactions={
+            "recorder": dict(redactor.counts),
+            "tracee_lines_dropped": collector.redaction_failures,
+            "proxy": (summaries.get("redaction_summary") or {}).get("counts"),
+        },
     )
     run.write_manifest(m)
     ev.emit("run_finished", degraded=bool(lost))

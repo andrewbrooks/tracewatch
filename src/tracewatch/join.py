@@ -45,7 +45,7 @@ def calibrate(conns, connects, bucket_ns=20_000_000):
     return near[len(near) // 2], top
 
 
-def join_records(fl, tr, proxy_port, info=None):
+def join_records(fl, tr, proxy_port, info=None, tracee_capped=False):
     conns = {r["conn_id"]: r for r in fl if r["kind"] == "conn"}
     flows = [r for r in fl if r["kind"] == "flow"]
     # a CONNECT tunnel that never produced an HTTP flow (refused, failed, non-HTTP) is still an event
@@ -111,7 +111,14 @@ def join_records(fl, tr, proxy_port, info=None):
     out = []
     for f in flows:
         r = dict(res.get(f["conn_id"], dict(pid=None, method="no-connection-record", candidates=[])))
-        r["scope"] = "unknown" if r["pid"] is None else ("in-tree" if r["pid"] in tree else "outside-tree")
+        if r["pid"] is None:
+            r["scope"] = "unknown"
+        elif r["pid"] in tree:
+            r["scope"] = "in-tree"
+        else:
+            # Tracee stopped recording at its size cap: a pid it never reported may well be in the tree.
+            # "outside-tree" would be a confident claim the data cannot support.
+            r["scope"] = "unknown-tracee-capped" if tracee_capped else "outside-tree"
         r.update(path=f["path"], conn_id=f["conn_id"], client_port=f["client_port"], http_version=f.get("http_version"))
         out.append(r)
     return out
@@ -119,8 +126,10 @@ def join_records(fl, tr, proxy_port, info=None):
 
 def join_run(rundir, proxy_port):
     fl = load(f"{rundir}/flows.jsonl")
-    tr = [e for e in load(f"{rundir}/tracee.jsonl") if "eventName" in e and e["processName"] != "twprobe"]
-    return join_records(fl, tr, proxy_port), fl, tr
+    raw = load(f"{rundir}/tracee.jsonl")
+    tr = [e for e in raw if "eventName" in e and e["processName"] != "twprobe"]
+    capped = any(e.get("kind") == "cap_reached" for e in raw)
+    return join_records(fl, tr, proxy_port, tracee_capped=capped), fl, tr
 
 
 if __name__ == "__main__":

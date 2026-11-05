@@ -194,3 +194,12 @@ def test_tunnel_without_flows_is_attributed_and_tunnel_with_flows_is_not_duplica
     rows = join_records(fl, [exe(10), connect(10, 10 * S - 5), connect(10, 20 * S - 5)], PP)
     assert sorted(r["path"] for r in rows) == ["/x", "CONNECT evil.example:443"]
     assert all(r["pid"] == 10 for r in rows)
+
+
+def test_capped_tracee_never_claims_outside_tree():
+    """If Tracee hit its size cap, a pid it never reported is UNKNOWN, not outside the tree."""
+    fl = [conn("a", 5000, [99], 10 * S), flow("a", "/x")]
+    uncapped = by(join_records(fl, [exe(10)], PP))
+    capped = by(join_records(fl, [exe(10)], PP, tracee_capped=True))
+    assert uncapped["/x"]["scope"] == "outside-tree"
+    assert capped["/x"]["scope"] == "unknown-tracee-capped" and capped["/x"]["pid"] == 99

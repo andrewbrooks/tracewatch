@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 IMAGE = "aquasec/tracee:latest"
+CAP_RESERVE = 4096  # headroom below the cap for the marker line
 EVENTS = "sched_process_exec,sched_process_exit,net_tcp_connect"
 _BASE = [
     "--pid=host",
@@ -108,12 +109,25 @@ class Collector(threading.Thread):
     The docker client is tied to our life with PDEATHSIG; the container itself is not (the sweep
     removes it), but with no log driver its output is discarded once we are gone."""
 
-    def __init__(self, run_id: str, container: str, tracee_args: list[str], out: Path, err: Path, transform=None):
+    def __init__(
+        self,
+        run_id: str,
+        container: str,
+        tracee_args: list[str],
+        out: Path,
+        err: Path,
+        transform=None,
+        max_bytes: int | None = None,
+    ):
         super().__init__(daemon=True, name="tracee-collector")
         self.run_id, self.container, self.tracee_args = run_id, container, tracee_args
         self.out, self.err = out, err
         self.transform = transform  # bytes line -> bytes line (redaction); applied BEFORE the write
         self.redaction_failures = 0
+        self.max_bytes = max_bytes  # past this, lines are dropped (and counted) but the pipe keeps draining
+        self.capped = False
+        self.dropped = 0
+        self.written = 0
         self.lines = 0
         self.bytes = 0
         self.proc: subprocess.Popen | None = None
@@ -152,7 +166,17 @@ class Collector(threading.Thread):
                     except Exception:  # noqa: BLE001 - fail closed: never write a line we could not redact
                         self.redaction_failures += 1
                         data = b'{"kind":"redaction_failed","where":"tracee"}\n'
-                os.write(fd, data)
+                if self.max_bytes and self.written + len(data) > self.max_bytes - CAP_RESERVE:
+                    if not self.capped:
+                        self.capped = True
+                        marker = b'{"kind":"cap_reached","source":"tracee","limit":%d,"written":%d}\n' % (
+                            self.max_bytes,
+                            self.written,
+                        )
+                        self.written += os.write(fd, marker)
+                    self.dropped += 1  # keep draining: a full pipe would block Tracee and the target's events
+                    continue
+                self.written += os.write(fd, data)
                 self.lines += 1
                 self.bytes += len(line)
                 if time.monotonic() - last_sync > 1:

@@ -45,7 +45,16 @@ SENSITIVE_PAIRS = frozenset(
         ("session", "id"),
     }
 )
-TEXT_TYPES = ("text/", "application/json", "application/xml", "application/x-www-form-urlencoded", "+json", "+xml")
+TEXT_TYPES = (
+    "text/",
+    "application/json",
+    "application/xml",
+    "application/x-www-form-urlencoded",
+    "+json",
+    "+xml",
+    "ndjson",
+    "jsonl",
+)
 PROCESS_CAP = 1_000_000  # bodies larger than this are not captured at all (cannot be redacted cheaply/safely)
 CRED_FLAGS = frozenset({"-u", "--user", "--proxy-user", "-U"})  # flags whose next argument is user:password
 
@@ -170,8 +179,30 @@ class Redactor:
             return self.tag("json", obj) if key is not None and name_is_sensitive(key) else self.text(obj)
         return obj
 
+    def _json_lines(self, text: str, prefix: str = "") -> str:
+        """Line-oriented JSON (ndjson, SSE `data:` lines): redact each JSON payload structurally."""
+        out = []
+        for line in text.split("\n"):
+            body = line[len(prefix) :].strip() if line.startswith(prefix) else None
+            if body:
+                try:
+                    out.append(
+                        prefix
+                        + (" " if prefix else "")
+                        + json.dumps(self.json_value(json.loads(body)), separators=(",", ":"), ensure_ascii=False)
+                    )
+                    continue
+                except ValueError:
+                    pass
+            out.append(self.text(line))
+        return "\n".join(out)
+
     def body_text(self, content_type: str, text: str) -> str:
         ct = (content_type or "").lower()
+        if "event-stream" in ct:
+            return self._json_lines(text, "data:")
+        if "ndjson" in ct or "jsonl" in ct:
+            return self._json_lines(text)
         if "json" in ct:
             try:
                 return json.dumps(self.json_value(json.loads(text)), separators=(",", ":"), ensure_ascii=False)
