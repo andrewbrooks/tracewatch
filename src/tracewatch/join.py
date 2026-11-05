@@ -48,6 +48,14 @@ def calibrate(conns, connects, bucket_ns=20_000_000):
 def join_records(fl, tr, proxy_port, info=None):
     conns = {r["conn_id"]: r for r in fl if r["kind"] == "conn"}
     flows = [r for r in fl if r["kind"] == "flow"]
+    # a CONNECT tunnel that never produced an HTTP flow (refused, failed, non-HTTP) is still an event
+    # worth attributing; one that did produce flows is represented by those flows, not twice
+    with_flows = {r["conn_id"] for r in flows}
+    flows += [
+        {**r, "path": f"CONNECT {r['host']}:{r['port']}"}
+        for r in fl
+        if r["kind"] == "connect" and r["conn_id"] not in with_flows
+    ]
     tree = {e["processId"] for e in tr}
     connects = sorted(
         (e["timestamp"], e["processId"])

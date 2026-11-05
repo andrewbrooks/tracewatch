@@ -181,3 +181,16 @@ def test_one_process_many_connections_calibrates_by_voting():
     r = by(join_records(fl, tr, PP, info))
     assert info["clock"] == "monotonic" and abs(info["offset_ns"] - (OFF - 2_000_000)) < 1000 and info["votes"] >= 6
     assert all(r[f"/m{i}"]["pid"] == 20 for i in range(6))
+
+
+def test_tunnel_without_flows_is_attributed_and_tunnel_with_flows_is_not_duplicated():
+    fl = [
+        conn("a", 5000, [10], 10 * S),
+        {"kind": "connect", "conn_id": "a", "client_port": 5000, "host": "evil.example", "port": 443},
+        conn("b", 5001, [10], 20 * S),
+        {"kind": "connect", "conn_id": "b", "client_port": 5001, "host": "ok.example", "port": 443},
+        flow("b", "/x"),
+    ]
+    rows = join_records(fl, [exe(10), connect(10, 10 * S - 5), connect(10, 20 * S - 5)], PP)
+    assert sorted(r["path"] for r in rows) == ["/x", "CONNECT evil.example:443"]
+    assert all(r["pid"] == 10 for r in rows)

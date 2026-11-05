@@ -35,7 +35,7 @@ leaks_now() {
   local n=$1 out=""
   c=$(docker ps -aq --filter label=tracewatch.run=$n | wc -l); [ "$c" != 0 ] && out+="containers=$c "
   p=$(pgrep -f "confdir=$OUT/runs/$n/ca" | wc -l); [ "$p" != 0 ] && out+="proxy_procs=$p "
-  k=$(pgrep -f "docker logs -f tw-$n" | wc -l); [ "$k" != 0 ] && out+="collector_procs=$k "
+  k=$(pgrep -f "tracewatch.run=$n" | wc -l); [ "$k" != 0 ] && out+="collector_procs=$k "
   echo "${out:-clean}"
 }
 fails=0

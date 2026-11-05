@@ -21,6 +21,7 @@ from pathlib import Path
 from . import __version__, tracee
 from .clock import stamp
 from .procinfo import start_ticks
+from .redact import Redactor
 from .rundir import CA_CERT, CA_DIR, FLOWS, MITM_LOG, TRACEE, TRACEE_ERR, EventLog, RunDir
 from .sweep import sweep
 
@@ -93,13 +94,14 @@ def record(o: Options) -> int:
     run = RunDir.create(o.runs_root, o.name)
     ev = EventLog(run.p("events.jsonl"))
     lost: list[str] = []
+    redactor = Redactor()  # one key per run, shared with the proxy via its environment, never written
     import mitmproxy.version as mv
 
     m = {
         "run_id": run.run_id,
         "status": "running",
         "tracewatch": __version__,
-        "argv": o.argv,
+        "argv": redactor.argv(o.argv),
         "cwd": os.getcwd(),
         "recorder_pid": os.getpid(),
         "recorder_start_ticks": start_ticks(os.getpid()),
@@ -163,13 +165,17 @@ def record(o: Options) -> int:
         str(port),
         "--set",
         f"confdir={run.p(CA_DIR)}",
+        "--set",
+        "flow_detail=0",  # mitm.log must not echo request URLs (they can carry secrets)
+        "--set",
+        "termlog_verbosity=warn",
     ]
     if o.upstream_ca:
         mitm_cmd += ["--set", f"ssl_verify_upstream_trusted_ca={o.upstream_ca}"]
     mitm_cmd += ["-s", proxy_addon.__file__]
     procs["mitm"] = subprocess.Popen(
         mitm_cmd,
-        env=dict(os.environ, TW_FLOWS=str(run.p(FLOWS))),
+        env=dict(os.environ, TW_FLOWS=str(run.p(FLOWS)), TW_REDACT_KEY=redactor.key.hex()),
         stdout=open(run.p(MITM_LOG), "ab"),
         stderr=subprocess.STDOUT,
     )
@@ -199,8 +205,9 @@ def record(o: Options) -> int:
         return abort_start("could not learn the root's host pid (is Docker up and Tracee runnable?)")
     m["root_host_pid"] = hp
     run.p("flags/p1").touch()
-    tracee.start_scoped(run.run_id, cname, hp)
-    collector = tracee.Collector(cname, run.p(TRACEE), run.p(TRACEE_ERR))
+    collector = tracee.Collector(
+        run.run_id, cname, tracee.scoped_args(hp), run.p(TRACEE), run.p(TRACEE_ERR), transform=redactor.tracee_line
+    )
     collector.start()
     ev.emit("component_started", component="tracee", container=cname, host_pid=hp)
     for _ in range(180):
@@ -262,7 +269,11 @@ def record(o: Options) -> int:
     removed = run.remove_ca_private_material()
     ev.emit("ca_private_material_removed", files=removed)
     m.update(
-        status="interrupted" if flag["stop"] else "finished", ended=stamp(), root_returncode=rc, degraded=bool(lost)
+        status="interrupted" if flag["stop"] else "finished",
+        ended=stamp(),
+        root_returncode=rc,
+        degraded=bool(lost),
+        redactions={"recorder": dict(redactor.counts), "tracee_lines_dropped": collector.redaction_failures},
     )
     run.write_manifest(m)
     ev.emit("run_finished", degraded=bool(lost))

@@ -81,10 +81,6 @@ def bootstrap_host_pid(run_id: str, timeout: float = 90) -> int | None:
     return int(ev["hostParentProcessId"]) if ev else None
 
 
-def start_scoped(run_id: str, name: str, host_pid: int) -> None:
-    docker_run(run_id, name, ["--events", EVENTS, "--scope", f"tree={host_pid}", "--output", "json"])
-
-
 def container_running(name: str) -> bool:
     r = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name], capture_output=True, text=True)
     return r.stdout.strip() == "true"
@@ -98,13 +94,26 @@ def remove(name: str) -> None:
     subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
-class Collector(threading.Thread):
-    """Pumps `docker logs -f <container>` into tracee.jsonl, one os.write per complete line.
-    The child is tied to our life with PDEATHSIG so a recorder crash cannot leave a stray follower."""
+def scoped_args(host_pid: int) -> list[str]:
+    return ["--events", EVENTS, "--scope", f"tree={host_pid}", "--output", "json"]
 
-    def __init__(self, container: str, out: Path, err: Path):
+
+class Collector(threading.Thread):
+    """Runs the scoped Tracee container ATTACHED with `--log-driver none` and pumps its stdout into
+    tracee.jsonl, one os.write per complete line, redacted first (`transform`).
+
+    Why not `docker run -d` + `docker logs -f`: Docker would persist every raw event, argv with secrets
+    included, in its own log store for the life of the container. With the `none` driver the only copy
+    is the pipe this thread reads, so nothing unredacted is ever written anywhere.
+    The docker client is tied to our life with PDEATHSIG; the container itself is not (the sweep
+    removes it), but with no log driver its output is discarded once we are gone."""
+
+    def __init__(self, run_id: str, container: str, tracee_args: list[str], out: Path, err: Path, transform=None):
         super().__init__(daemon=True, name="tracee-collector")
-        self.container, self.out, self.err = container, out, err
+        self.run_id, self.container, self.tracee_args = run_id, container, tracee_args
+        self.out, self.err = out, err
+        self.transform = transform  # bytes line -> bytes line (redaction); applied BEFORE the write
+        self.redaction_failures = 0
         self.lines = 0
         self.bytes = 0
         self.proc: subprocess.Popen | None = None
@@ -113,7 +122,22 @@ class Collector(threading.Thread):
     def run(self) -> None:
         try:
             self.proc = subprocess.Popen(
-                ["setpriv", "--pdeathsig", "SIGKILL", "docker", "logs", "-f", self.container],
+                [
+                    "setpriv",
+                    "--pdeathsig",
+                    "SIGKILL",
+                    "docker",
+                    "run",
+                    "--name",
+                    self.container,
+                    "--label",
+                    f"tracewatch.run={self.run_id}",
+                    "--log-driver",
+                    "none",
+                    *_BASE,
+                    IMAGE,
+                    *self.tracee_args,
+                ],
                 stdout=subprocess.PIPE,
                 stderr=open(self.err, "ab"),
                 bufsize=0,
@@ -121,7 +145,14 @@ class Collector(threading.Thread):
             fd = os.open(self.out, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             last_sync = time.monotonic()
             for line in iter(self.proc.stdout.readline, b""):
-                os.write(fd, line if line.endswith(b"\n") else line + b"\n")
+                data = line if line.endswith(b"\n") else line + b"\n"
+                if self.transform:
+                    try:
+                        data = self.transform(data)
+                    except Exception:  # noqa: BLE001 - fail closed: never write a line we could not redact
+                        self.redaction_failures += 1
+                        data = b'{"kind":"redaction_failed","where":"tracee"}\n'
+                os.write(fd, data)
                 self.lines += 1
                 self.bytes += len(line)
                 if time.monotonic() - last_sync > 1:
@@ -129,7 +160,7 @@ class Collector(threading.Thread):
                     last_sync = time.monotonic()
             os.fsync(fd)
             os.close(fd)
-        except Exception as e:  # surfaced via .error; the recorder records the loss
+        except Exception as e:  # noqa: BLE001 - surfaced via .error; the recorder records the loss
             self.error = repr(e)
 
     def stop(self) -> None:
