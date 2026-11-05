@@ -56,14 +56,16 @@ def _read_jsonl(path: Path) -> tuple[list[dict], dict]:
     return recs, stats
 
 
-def assess(run_dir: Path) -> dict:
-    run_dir = Path(run_dir)
-    out: dict = {"run_dir": str(run_dir), "verdict": "unreadable", "reasons": [], "gaps": [], "caps": [], "files": {}}
+def _read_manifest(run_dir: Path) -> dict | None:
     try:
-        m = json.loads((run_dir / "manifest.json").read_text())
+        return json.loads((run_dir / "manifest.json").read_text())
     except (OSError, ValueError):
-        out["reasons"].append("manifest.json is missing or unreadable")
-        return out
+        return None
+
+
+def _read_sources(run_dir: Path, out: dict) -> tuple[list[dict], list[dict], list[dict]]:
+    """The recorder's own log (sorted by time), the kernel records and the proxy records; how each file read goes
+    (corrupt or truncated lines) is written into out["files"]."""
     ev, ev_stats = _read_jsonl(run_dir / "events.jsonl")
     ev.sort(key=lambda e: e.get("t_mono_ns", 0))
     tracee_recs: list[dict] = []
@@ -75,9 +77,15 @@ def assess(run_dir: Path) -> dict:
         elif name == "flows.jsonl":
             flow_recs = recs
         out["files"][name] = stats
-    status = m.get("status")
-    out["status"] = status
-    at = lambda kind: next((e for e in ev if e["kind"] == kind), None)  # noqa: E731
+    return ev, tracee_recs, flow_recs
+
+
+def _recording_window(out: dict, m: dict, ev: list[dict]) -> tuple[dict | None, dict | None, list[dict], int | None]:
+    """When recording was armed, when the root exited, the heartbeats; -> (exited, finished, beats, last_beat)."""
+
+    def at(kind: str) -> dict | None:
+        return next((e for e in ev if e["kind"] == kind), None)
+
     armed, exited, finished = at("recording_armed"), at("root_exited"), at("run_finished")
     beats = [e for e in ev if e["kind"] == "heartbeat"]
     last_beat = beats[-1]["t_mono_ns"] if beats else None
@@ -90,9 +98,13 @@ def assess(run_dir: Path) -> dict:
         out["policy"] = m["policy"]
     if m.get("target_stopped"):
         out["target_stopped"] = m["target_stopped"]
+    return exited, finished, beats, last_beat
 
-    losses: list[str] = []
-    # ---- how did the run end?
+
+def _how_the_run_ended(
+    out: dict, m: dict, status: str | None, exited: dict | None, finished: dict | None, last_beat: int | None
+) -> str | None:
+    """The verdict implied by how the run ended; None (with a reason recorded) if the status is not one we know."""
     if status in ("finished", "interrupted"):
         if not finished:
             verdict, why = "incomplete", "manifest says finished but events.jsonl has no run_finished"
@@ -113,15 +125,18 @@ def assess(run_dir: Path) -> dict:
         out["reasons"].append(f"the recording never started: {m.get('why')}")
     else:
         out["reasons"].append(f"unknown status {status!r}")
-        return out
+        return None
     if verdict == "incomplete" and last_beat is not None:
         # nothing after the last heartbeat (+ one interval of slack) can be vouched for
         out["untrusted_after_mono"] = last_beat + int(HEARTBEAT_S * 1e9)
         out["end_mono"] = last_beat
     if m.get("target_still_running"):
         out["reasons"].append("the target was still running (unrecorded) when the run was swept")
+    return verdict
 
-    # ---- gaps and caps (a gap runs from the loss to the end of the trusted window)
+
+def _gaps_and_caps(out: dict, ev: list[dict], beats: list[dict], losses: list[str]) -> None:
+    """A gap runs from the loss to the end of the trusted window."""
     end = out.get("end_mono")
     for e in ev:
         if e["kind"] == "component_died":
@@ -157,6 +172,10 @@ def assess(run_dir: Path) -> dict:
                 }
             )
             losses.append("recorder stall")
+
+
+def _bypassed_proxy(out: dict, m: dict, tracee_recs: list[dict], losses: list[str]) -> None:
+    """TCP connections the kernel saw that never went to the proxy (loopback ones are only noted)."""
     proxy_port = m.get("proxy_port")
     direct: dict[tuple[str, int], dict] = defaultdict(lambda: {"count": 0, "pids": set()})
     for e in tracee_recs:
@@ -182,6 +201,10 @@ def assess(run_dir: Path) -> dict:
             f"{pl(n, 'connection')} to {pl(len(out['unproxied']), 'destination')} "
             "bypassed the proxy: content not recorded"
         )
+
+
+def _refused_certificates(out: dict, flow_recs: list[dict], losses: list[str]) -> None:
+    """Clients that aborted the TLS handshake with the recorder's certificate."""
     rejected: dict[str, dict] = {}
     for r in flow_recs:
         if r.get("kind") == "tls_failed" and r.get("side") == "client":
@@ -194,6 +217,10 @@ def assess(run_dir: Path) -> dict:
             f"{pl(n, 'connection')} to {pl(len(rejected), 'host')}: the client refused the recorder's certificate "
             "(certificate pinning, or it does not trust the CA): content not recorded"
         )
+
+
+def _caveats(out: dict, m: dict, losses: list[str]) -> None:
+    """NO_PROXY in the environment, a Tracee cap that hides later bypasses, and corrupt lines."""
     if m.get("proxy_env", {}).get("inherited_no_proxy"):
         out["reasons"].append(
             f"the environment had NO_PROXY={m['proxy_env']['inherited_no_proxy']!r}: matching hosts bypass the proxy"
@@ -203,6 +230,28 @@ def assess(run_dir: Path) -> dict:
     bad = {n: s["corrupt"] for n, s in out["files"].items() if s.get("corrupt")}
     if bad:
         losses.append(f"corrupt lines {bad}")
+
+
+def assess(run_dir: Path) -> dict:
+    """What can be trusted in a run directory: a verdict, reasons, gaps and caps, and what bypassed the proxy."""
+    run_dir = Path(run_dir)
+    out: dict = {"run_dir": str(run_dir), "verdict": "unreadable", "reasons": [], "gaps": [], "caps": [], "files": {}}
+    m = _read_manifest(run_dir)
+    if m is None:
+        out["reasons"].append("manifest.json is missing or unreadable")
+        return out
+    ev, tracee_recs, flow_recs = _read_sources(run_dir, out)
+    status = m.get("status")
+    out["status"] = status
+    exited, finished, beats, last_beat = _recording_window(out, m, ev)
+    losses: list[str] = []
+    verdict = _how_the_run_ended(out, m, status, exited, finished, last_beat)
+    if verdict is None:
+        return out
+    _gaps_and_caps(out, ev, beats, losses)
+    _bypassed_proxy(out, m, tracee_recs, losses)
+    _refused_certificates(out, flow_recs, losses)
+    _caveats(out, m, losses)
     if verdict == "complete" and any(s.get("truncated_last") for s in out["files"].values()):
         losses.append("a file ends in a half-written line")
     if verdict == "complete" and losses:
