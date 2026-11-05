@@ -48,11 +48,18 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--format", choices=["html", "md", "json"], default="html")
     g.add_argument("-o", "--output", help="output file (default: <run_dir>/report.<ext>); '-' for stdout")
     g.add_argument("--open", action="store_true", help="open the result in a browser (html only)")
+    df = sub.add_parser("diff", help="what did the process do differently? exit 0 = same behaviour, 1 = changed")
+    df.add_argument("before")
+    df.add_argument("after")
+    df.add_argument("--format", choices=["md", "json"], default="md")
+    df.add_argument("-o", "--output", help="output file (default: stdout)")
     s = sub.add_parser("sweep", help="finalize runs whose recorder died, remove leaked containers/proxies")
     s.add_argument("--out", default=DEFAULT_RUNS)
     a = p.parse_args(argv)
     if a.cmd == "report":
         return _report(a)
+    if a.cmd == "diff":
+        return _diff(a)
     if a.cmd == "verify":
         import json
 
@@ -105,6 +112,28 @@ def main(argv: list[str] | None = None) -> int:
             ws_msg_cap=a.ws_msg_cap,
         )
     )
+
+
+def _diff(a) -> int:
+    import json
+
+    from .diff import compare, render_md
+    from .model import build
+
+    models = []
+    for d in (a.before, a.after):
+        if not (Path(d) / "manifest.json").exists():
+            print(f"tracewatch: {d} is not a run directory (no manifest.json)", file=sys.stderr)
+            return 2
+        models.append(build(Path(d)))
+    res = compare(*models)
+    body = json.dumps(res, indent=1) if a.format == "json" else render_md(res)
+    if a.output:
+        Path(a.output).write_text(body)
+        Path(a.output).chmod(0o600)
+    else:
+        sys.stdout.write(body)
+    return 1 if res["changed"] else 0
 
 
 def _report(a) -> int:
