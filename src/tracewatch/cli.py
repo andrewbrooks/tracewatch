@@ -60,6 +60,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  - {r}")
             for g in res["gaps"]:
                 print(f"  gap: {g['source']}: {g['reason']}")
+            for u in res.get("unproxied", []):
+                where = f"{u['dst']}:{u['port']} x{u['count']} by pid(s) {u['pids']}"
+                print(f"  BYPASSED THE PROXY (content not recorded): {where}")
+            if res.get("unproxied_local"):
+                n = sum(u["count"] for u in res["unproxied_local"])
+                print(f"  note: {n} loopback connection(s) did not use the proxy")
             if res.get("target_stopped"):
                 print(f"  the recorder stopped the target: {res['target_stopped']['reason']}")
             if res.get("untrusted_after_mono"):

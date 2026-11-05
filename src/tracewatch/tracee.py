@@ -155,6 +155,7 @@ class Collector(threading.Thread):
                 stdout=subprocess.PIPE,
                 stderr=open(self.err, "ab"),
                 bufsize=0,
+                start_new_session=True,  # keep terminal signals (Ctrl-C) away from the Tracee client
             )
             fd = os.open(self.out, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             last_sync = time.monotonic()

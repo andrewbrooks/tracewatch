@@ -97,13 +97,62 @@ def test_gzip_decode_is_bounded(addon):
     assert rec["captured"] and "VISMARK" in rec["text"]
 
 
-def test_unknown_or_big_encodings_are_described_not_stored(addon):
+def test_unknown_encoding_is_described_not_stored(addon):
     rec = addon._body_record({"content-type": "text/plain", "content-encoding": "compress"}, 5, b"zzzzz")
     assert rec["captured"] is False and "not decodable" in rec["reason"]
-    rec = addon._body_record(
-        {"content-type": "text/plain", "content-encoding": "br"}, 10**6, b"x" * (addon._BIG_ENCODED + 1)
-    )
-    assert rec["captured"] is False
+
+
+def _enc_headers(enc):
+    return {"content-type": "text/plain", "content-encoding": enc}
+
+
+def test_brotli_and_zstd_round_trip_at_any_size_up_to_the_limit(addon):
+    import brotli
+    from backports import zstd
+
+    text = ("VISMARKenc line of text\n" * 20000).encode()  # ~480 KB decoded
+    for enc, blob in (("br", brotli.compress(text)), ("zstd", zstd.compress(text))):
+        rec = addon._body_record(_enc_headers(enc), len(blob), blob)
+        assert rec["captured"] and "VISMARKenc" in rec["text"] and rec["truncated"], enc
+
+
+def test_brotli_and_zstd_bombs_are_refused_not_expanded(addon):
+    import brotli
+    from backports import zstd
+
+    for enc, blob in (("br", brotli.compress(b"A" * 8_000_000)), ("zstd", zstd.compress(b"A" * 8_000_000))):
+        assert len(blob) < 100_000
+        rec = addon._body_record(_enc_headers(enc), len(blob), blob)
+        assert rec["captured"] is False and "limit" in rec["reason"], enc
+
+
+def test_truncated_and_garbage_encoded_bodies_are_described_never_raise(addon):
+    import brotli
+    from backports import zstd
+
+    for enc, good in (
+        ("br", brotli.compress(b"hello world" * 1000)),
+        ("zstd", zstd.compress(b"hello world" * 1000)),
+        ("gzip", __import__("gzip").compress(b"hello world" * 1000)),
+    ):
+        for blob in (good[: len(good) // 2], b"\x00\x01garbage\xff" * 5):
+            rec = addon._body_record(_enc_headers(enc), len(blob), blob)
+            assert rec["captured"] is False and rec["reason"], (enc, rec)
+
+
+def test_missing_decoder_module_degrades_to_a_description(addon, monkeypatch):
+    import builtins
+
+    real = builtins.__import__
+
+    def no_zstd(name, *a, **k):
+        if name in ("compression", "backports"):
+            raise ImportError(name)
+        return real(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", no_zstd)
+    rec = addon._body_record(_enc_headers("zstd"), 10, b"\x28\xb5\x2f\xfd")
+    assert rec["captured"] is False and "undecodable" in rec["reason"]
 
 
 def test_charset_is_honored_and_bad_bytes_do_not_crash(addon):

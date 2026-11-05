@@ -10,11 +10,18 @@ Verdicts
   in-progress            the recorder is still alive and has not finished
   unreadable             no usable manifest
 
+Unproxied connections: a TCP connect by the traced tree that did not go to the proxy (the target ignored the
+proxy settings, or NO_PROXY matched) is visible to Tracee but its CONTENT was never recorded. Those to a
+non-loopback address make the verdict complete-with-losses; loopback ones are listed but are not a loss.
+UDP (DNS, QUIC/HTTP3) is invisible to this tool altogether.
+
 Times are CLOCK_MONOTONIC nanoseconds as recorded in events.jsonl (the wall clock steps on some hosts)."""
 
 from __future__ import annotations
 
+import ipaddress
 import json
+from collections import defaultdict
 from pathlib import Path
 
 from .procinfo import same_process
@@ -58,8 +65,11 @@ def assess(run_dir: Path) -> dict:
         return out
     ev, ev_stats = _read_jsonl(run_dir / "events.jsonl")
     ev.sort(key=lambda e: e.get("t_mono_ns", 0))
+    tracee_recs: list[dict] = []
     for name in SOURCES:
-        _, stats = (ev, ev_stats) if name == "events.jsonl" else _read_jsonl(run_dir / name)
+        recs, stats = (ev, ev_stats) if name == "events.jsonl" else _read_jsonl(run_dir / name)
+        if name == "tracee.jsonl":
+            tracee_recs = recs
         out["files"][name] = stats
     status = m.get("status")
     out["status"] = status
@@ -143,6 +153,36 @@ def assess(run_dir: Path) -> dict:
                 }
             )
             losses.append("recorder stall")
+    proxy_port = m.get("proxy_port")
+    direct: dict[tuple[str, int], dict] = defaultdict(lambda: {"count": 0, "pids": set()})
+    for e in tracee_recs:
+        if e.get("eventName") != "net_tcp_connect":
+            continue
+        args = {a["name"]: a["value"] for a in e.get("args", [])}
+        if args.get("dst_port") == proxy_port or "dst" not in args:
+            continue
+        d = direct[(args["dst"], args.get("dst_port"))]
+        d["count"] += 1
+        d["pids"].add(e.get("processId"))
+    out["unproxied"], out["unproxied_local"] = [], []
+    for (dst, port), d in sorted(direct.items(), key=lambda kv: (-kv[1]["count"], kv[0])):
+        row = {"dst": dst, "port": port, "count": d["count"], "pids": sorted(d["pids"])}
+        try:
+            local = ipaddress.ip_address(dst).is_loopback
+        except ValueError:
+            local = False
+        out["unproxied_local" if local else "unproxied"].append(row)
+    if out["unproxied"]:
+        n = sum(r["count"] for r in out["unproxied"])
+        losses.append(
+            f"{n} connection(s) to {len(out['unproxied'])} destination(s) bypassed the proxy: content not recorded"
+        )
+    if m.get("proxy_env", {}).get("inherited_no_proxy"):
+        out["reasons"].append(
+            f"the environment had NO_PROXY={m['proxy_env']['inherited_no_proxy']!r}: matching hosts bypass the proxy"
+        )
+    if any(c["cap"].startswith("tracee") for c in out["caps"]) and out["unproxied"] == []:
+        out["reasons"].append("Tracee hit its size cap: later bypassed connections cannot be ruled out")
     bad = {n: s["corrupt"] for n, s in out["files"].items() if s.get("corrupt")}
     if bad:
         losses.append(f"corrupt lines {bad}")

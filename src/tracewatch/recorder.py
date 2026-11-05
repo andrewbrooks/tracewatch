@@ -252,6 +252,9 @@ def record(o: Options) -> int:
         ),
         stdout=open(run.p(MITM_LOG), "ab"),
         stderr=subprocess.STDOUT,
+        # Own session: a terminal's Ctrl-C goes to the whole foreground process group. It must reach the target
+        # (and us), NOT our components, or the target's shutdown traffic would go unrecorded.
+        start_new_session=True,
     )
     if not _wait_port(port, 60) or not run.p(CA_CERT).exists():
         return abort_start("proxy did not come up")
@@ -354,6 +357,8 @@ def record(o: Options) -> int:
                 flows_bytes=run.p(FLOWS).stat().st_size if run.p(FLOWS).exists() else 0,
             )
         time.sleep(0.2)
+    if flag["stop"] and not forwarded:  # the signal arrived and the target exited before the loop handled it
+        ev.emit("signal_received", signal=flag["sig"], handled="after the target exited")
     rc = root.returncode
     ev.emit("root_exited", returncode=rc, signal=(-rc if rc < 0 else None), pid=root.pid)
 

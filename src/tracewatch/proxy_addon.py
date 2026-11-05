@@ -40,7 +40,6 @@ WS_MSG_CAP = int(os.environ.get("TW_WS_MSG_CAP") or 2048)  # stored characters p
 WS_BUDGET = int(os.environ.get("TW_WS_BUDGET") or 262144)  # stored characters of message text per connection
 WS_MAX_RECORDS = int(os.environ.get("TW_WS_MAX_RECORDS") or 10000)  # message records per connection
 FLAGS_DIR = os.environ.get("TW_FLAGS_DIR")
-_BIG_ENCODED = 64 * 1024  # br/zstd have no bounded decoder here: only attempt small ones
 
 _fd = None
 _written = 0
@@ -127,26 +126,48 @@ def _charset(content_type: str) -> str:
 
 def _decode(raw: bytes, encoding: str) -> bytes:
     """Content-Encoding -> bytes, with a hard output limit (a small compressed body must not be able to
-    expand into a memory bomb). Raises ValueError when the body cannot be decoded within the limit."""
+    expand into a memory bomb). Raises ValueError, never anything else, when the body cannot be decoded
+    within the limit: the caller then DESCRIBES the body instead of storing it."""
     enc = (encoding or "").strip().lower()
-    if enc in ("", "identity"):
-        return raw
-    if enc in ("gzip", "x-gzip", "deflate"):
-        d = zlib.decompressobj(16 + zlib.MAX_WBITS if "gzip" in enc else zlib.MAX_WBITS)
-        try:
-            out = d.decompress(raw, PROCESS_CAP + 1)
-        except zlib.error as e:
-            raise ValueError("undecodable") from e
-        if len(out) > PROCESS_CAP or d.unconsumed_tail:
-            raise ValueError("decoded size over the limit")
-        return out
-    if enc in ("br", "zstd") and len(raw) <= _BIG_ENCODED:
-        from mitmproxy.net import encoding as menc
+    limit = PROCESS_CAP
+    try:
+        if enc in ("", "identity"):
+            return raw
+        if enc in ("gzip", "x-gzip", "deflate"):
+            d = zlib.decompressobj(16 + zlib.MAX_WBITS if "gzip" in enc else zlib.MAX_WBITS)
+            out = d.decompress(raw, limit + 1)
+            if len(out) > limit or d.unconsumed_tail:
+                raise ValueError("decoded size over the limit")
+            if not d.eof:  # zlib does not complain about a stream that simply stops
+                raise ValueError(f"incomplete {enc} data")
+            return out
+        if enc == "br":
+            import brotli
 
-        out = menc.decode(raw, enc)
-        if len(out) > PROCESS_CAP:
-            raise ValueError("decoded size over the limit")
-        return out
+            d = brotli.Decompressor()
+            out = d.process(raw, output_buffer_limit=limit + 1)
+            if len(out) > limit or (not d.is_finished() and len(out) >= limit):
+                raise ValueError("decoded size over the limit")
+            if not d.is_finished():
+                raise ValueError("incomplete brotli data")
+            return out
+        if enc == "zstd":
+            try:
+                from compression import zstd  # Python 3.14+
+            except ImportError:
+                from backports import zstd  # Python < 3.14
+
+            d = zstd.ZstdDecompressor()
+            out = d.decompress(raw, max_length=limit + 1)
+            if len(out) > limit:
+                raise ValueError("decoded size over the limit")
+            if not d.eof:
+                raise ValueError("incomplete zstd data")
+            return out
+    except ValueError:
+        raise
+    except Exception as e:  # noqa: BLE001 - zlib.error, brotli.error, ZstdError, ImportError ...: all mean "cannot decode"
+        raise ValueError(f"undecodable ({type(e).__name__})") from e
     raise ValueError(f"content-encoding {enc!r} not decodable for capture")
 
 

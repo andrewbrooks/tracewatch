@@ -172,3 +172,54 @@ def test_swept_run_with_target_still_running_says_so(tmp_path):
         )
     )
     assert any("still running" in r for r in a["reasons"])
+
+
+def tcp(dst, port, pid=7):
+    return (
+        json.dumps(
+            {
+                "eventName": "net_tcp_connect",
+                "processId": pid,
+                "processName": "x",
+                "args": [{"name": "dst", "value": dst}, {"name": "dst_port", "value": port}],
+            }
+        )
+        + "\n"
+    )
+
+
+def test_connection_to_the_proxy_is_not_a_bypass(tmp_path):
+    a = assess(make_run(tmp_path, manifest={"proxy_port": 4000}, tracee=tcp("127.0.0.1", 4000) * 3))
+    assert a["verdict"] == "complete" and a["unproxied"] == [] and a["unproxied_local"] == []
+
+
+def test_external_connection_that_skipped_the_proxy_is_a_loss(tmp_path):
+    t = tcp("93.184.216.34", 443, pid=7) + tcp("93.184.216.34", 443, pid=8) + tcp("127.0.0.1", 4000)
+    a = assess(make_run(tmp_path, manifest={"proxy_port": 4000}, tracee=t))
+    assert a["verdict"] == "complete-with-losses"
+    assert a["unproxied"] == [{"dst": "93.184.216.34", "port": 443, "count": 2, "pids": [7, 8]}]
+    assert any("bypassed the proxy" in r for r in a["reasons"])
+
+
+def test_loopback_bypass_is_listed_but_is_not_a_loss(tmp_path):
+    t = tcp("127.0.0.1", 5432) + tcp("::1", 6379) + tcp("127.0.0.1", 4000)
+    a = assess(make_run(tmp_path, manifest={"proxy_port": 4000}, tracee=t))
+    assert a["verdict"] == "complete" and a["unproxied"] == []
+    assert sorted(u["port"] for u in a["unproxied_local"]) == [5432, 6379]
+
+
+def test_private_network_address_counts_as_external(tmp_path):
+    a = assess(make_run(tmp_path, manifest={"proxy_port": 4000}, tracee=tcp("10.1.2.3", 8080)))
+    assert a["verdict"] == "complete-with-losses" and a["unproxied"][0]["dst"] == "10.1.2.3"
+
+
+def test_inherited_no_proxy_is_called_out(tmp_path):
+    m = {"proxy_port": 4000, "proxy_env": {"inherited_no_proxy": "*.corp,10.0.0.0/8"}}
+    a = assess(make_run(tmp_path, manifest=m))
+    assert any("NO_PROXY" in r for r in a["reasons"])
+
+
+def test_capped_tracee_cannot_rule_out_bypasses(tmp_path):
+    events = standard_events() + [ev("cap_reached", 8, cap="tracee:hard")]
+    a = assess(make_run(tmp_path, events=events, manifest={"proxy_port": 4000}))
+    assert any("cannot be ruled out" in r for r in a["reasons"])

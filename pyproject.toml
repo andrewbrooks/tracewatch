@@ -31,3 +31,4 @@ select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+python_files = ["test_*.py"]  # integration scripts (tty_test.py, ...) are run by hand, not collected
