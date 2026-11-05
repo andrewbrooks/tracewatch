@@ -399,6 +399,203 @@ def run_themes(b, path):
     pg.close()
 
 
+ALL_TABS = ("overview", "tree", "timeline", "network", "http", "dns", "commands", "files", "events", "findings", "run")
+
+
+def run_edges(b):
+    """Empty and broken recordings must say so plainly, never look like a success."""
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "e").mkdir()
+        (Path(d) / "i").mkdir()
+        empty = build(synth.empty_run(Path(d) / "e"))
+        incomplete = build(synth.incomplete_run(Path(d) / "i"))
+    pe, pi = write_report(empty, "empty.html"), write_report(incomplete, "incomplete.html")
+    s = Session(b, pe)
+    p = s.page
+    banner = p.locator("#view-overview .banner").inner_text()
+    check(
+        "an EMPTY recording is not shown as a success (neutral 'No activity recorded' banner)",
+        "No activity recorded" in banner and "Recording complete" not in banner,
+    )
+    check(
+        "the header verdict for an empty recording is neutral, not green",
+        "NO ACTIVITY RECORDED" in p.locator("#top .verdict").inner_text(),
+    )
+    check(
+        "the empty activity chart explains itself instead of drawing a 0..1 axis",
+        p.locator("#view-overview .emptystate:has-text('No activity to chart')").count() == 1,
+    )
+    for t in ALL_TABS:
+        s.tab(t)
+    s.tab("tree")
+    check(
+        "the empty process tree says why it is empty",
+        p.locator("#view-tree .emptystate:has-text('No processes were recorded')").count() == 1,
+    )
+    s.tab("commands")
+    check("an empty table shows an explanatory empty state", p.locator("#view-commands .emptystate").count() == 1)
+    check("no console errors on an empty recording across all views", not s.errors, "; ".join(s.errors[:2]))
+    s.page.close()
+    s = Session(b, pi)
+    p = s.page
+    banner = p.locator("#view-overview .banner").inner_text()
+    check(
+        "an INCOMPLETE recording says what is untrustworthy",
+        "Recording incomplete" in banner and "can be trusted" in banner,
+    )
+    check(
+        "the untrusted region is marked on the activity chart and the coverage strip",
+        p.locator("#view-overview svg.chart text:has-text('UNTRUSTED')").count() == 1
+        and p.locator("#view-overview .cov .untrusted").count() == 3,
+    )
+    check(
+        "the untrusted time shown is inside the run (no absurd number)",
+        "+5.000s" in banner or "can be trusted" in banner and "e+" not in banner and "699" not in banner,
+    )
+    p.click("#top .verdict")
+    check("clicking the verdict opens the integrity details", p.locator("#view-run.on").count() == 1)
+    check("no console errors on an incomplete recording", not s.errors, "; ".join(s.errors[:2]))
+    s.page.close()
+
+
+def run_responsive(b, path):
+    for w, h, label in ((390, 844, "phone"), (820, 1000, "small tablet"), (1100, 800, "laptop")):
+        s = Session(b, path, width=w, height=h)
+        p = s.page
+        over = []
+        for t in ALL_TABS:
+            s.tab(t)
+            sw = p.evaluate(
+                "[document.documentElement.scrollWidth, innerWidth, document.querySelector('#main').scrollWidth, document.querySelector('#main').clientWidth]"
+            )
+            if sw[0] > sw[1] + 1:
+                over.append((t, sw))
+        check(f"[{label} {w}px] no view causes horizontal page overflow", not over, str(over))
+        top = p.evaluate(
+            "(() => { const r = document.querySelector('#top').getBoundingClientRect(); return [r.right, r.height]; })()"
+        )
+        check(
+            f"[{label}] the header fits the viewport ({top[0]:.0f}px of {w}px, {top[1]:.0f}px tall)",
+            top[0] <= w + 1 and (w > 820 or top[1] < 170),
+        )
+        rail = p.evaluate(
+            "(() => { const r = document.querySelector('#rail').getBoundingClientRect(); return [r.top, r.bottom, r.width, innerHeight]; })()"
+        )
+        if w <= 820:
+            check(f"[{label}] navigation is a bottom bar", rail[1] >= rail[3] - 2 and rail[2] >= w - 2)
+        else:
+            check(f"[{label}] navigation is a side rail", rail[2] < 100)
+        tiny = p.evaluate(
+            "[...document.querySelectorAll('button, .tab, .btn, .iconbtn')].filter(e => e.offsetParent !== null).map(e => { const r = e.getBoundingClientRect(); return [e.textContent.trim().slice(0, 14) || e.getAttribute('aria-label'), Math.round(r.width), Math.round(r.height)]; }).filter(x => x[1] < 24 || x[2] < 24)"
+        )
+        check(f"[{label}] every visible control is at least 24x24 px (WCAG target size)", not tiny, str(tiny[:4]))
+        if w <= 820:
+            s.tab("http")
+            p.locator(".view.on .tbl-row").first.click()
+            p.wait_for_timeout(450)
+            dw = p.evaluate("document.querySelector('#drawer').getBoundingClientRect().width")
+            check(f"[{label}] the detail drawer takes the full screen width ({dw:.0f}px)", abs(dw - w) < 2)
+            p.screenshot(path=str(OUT / f"responsive_{label.replace(' ', '_')}_drawer.png"))
+        check(f"[{label}] no console errors", not s.errors, "; ".join(s.errors[:2]))
+        s.page.close()
+
+
+def run_keyboard(b, path):
+    s = Session(b, path)
+    p = s.page
+    p.evaluate("document.body.focus()")
+    p.keyboard.press("Tab")
+    check("the first Tab stop is the 'Skip to content' link", p.evaluate("document.activeElement.className") == "skip")
+    p.keyboard.press("?")
+    check("'?' opens the keyboard-shortcuts dialog", p.locator("#help.on").count() == 1)
+    p.keyboard.press("Escape")
+    check("Esc closes the dialog", p.locator("#help.on").count() == 0)
+    p.keyboard.press("2")
+    p.wait_for_timeout(300)
+    check(
+        "number keys switch views ('2' = process tree)",
+        p.locator("#view-tree.on").count() == 1 and p.evaluate("document.title").startswith("Process tree"),
+    )
+    # tree keyboard navigation
+    rootid = p.evaluate("document.querySelector('g.node[tabindex=\"0\"]').getAttribute('aria-label')")
+    check(
+        f"the tree has ONE tab stop, not one per process ({rootid.split(',')[0]})",
+        p.locator("g.node[tabindex='0']").count() == 1 and p.locator("g.node[tabindex='-1']").count() >= 5,
+    )
+    p.locator("g.node[tabindex='0']").focus()
+    p.keyboard.press("ArrowRight")
+    moved = p.evaluate("document.activeElement.getAttribute('aria-label')")
+    check("ArrowRight moves from the root to its first child", moved is not None and moved != rootid)
+    p.keyboard.press("ArrowLeft")
+    check(
+        "ArrowLeft moves back to the parent", p.evaluate("document.activeElement.getAttribute('aria-label')") == rootid
+    )
+    p.keyboard.press("ArrowRight")
+    p.keyboard.press("Enter")
+    p.wait_for_timeout(400)
+    inside = p.evaluate("document.querySelector('#drawer').contains(document.activeElement)")
+    check("Enter opens the drawer and moves keyboard focus into it", p.locator("#drawer.open").count() == 1 and inside)
+    p.keyboard.press("Escape")
+    p.wait_for_timeout(350)
+    back = p.evaluate("document.activeElement.classList.contains('node')")
+    check(
+        "Esc closes the drawer and returns focus to the node that opened it",
+        p.locator("#drawer.open").count() == 0 and back,
+    )
+    check(
+        "the closed drawer is inert (not reachable by Tab)",
+        p.evaluate("document.querySelector('#drawer').hasAttribute('inert')"),
+    )
+    # zoom controls
+    before = p.locator("#view-tree .zl").inner_text()
+    p.click("button[aria-label='Zoom in']")
+    check(
+        f"the zoom buttons work ({before} -> {p.locator('#view-tree .zl').inner_text()})",
+        p.locator("#view-tree .zl").inner_text() != before,
+    )
+    # table keyboard navigation
+    s.tab("commands")
+    p.locator(".view.on .tbl-row").first.focus()
+    p.keyboard.press("ArrowDown")
+    p.keyboard.press("ArrowDown")
+    check("ArrowDown moves through table rows", p.evaluate("document.activeElement.dataset.i") == "2")
+    p.keyboard.press("End")
+    p.wait_for_timeout(200)
+    check("End jumps to the last row", int(p.evaluate("document.activeElement.dataset.i")) >= 5)
+    p.keyboard.press("Enter")
+    p.wait_for_timeout(350)
+    check("Enter on a row opens its details", p.locator("#drawer.open").count() == 1)
+    p.keyboard.press("Escape")
+    check(
+        "the sorted column header exposes aria-sort",
+        p.locator(
+            ".view.on .tbl-head button[aria-sort='ascending'], .view.on .tbl-head button[aria-sort='descending']"
+        ).count()
+        == 1,
+    )
+    # search -> contextual empty state -> recovery
+    p.fill("#search", "zzzz-no-such-command")
+    p.wait_for_timeout(450)
+    check(
+        "a search that matches nothing says so and offers recovery",
+        p.locator(".view.on .emptystate:has-text('No matches')").count() == 1,
+    )
+    p.locator(".view.on .emptystate .btn").click()
+    p.wait_for_timeout(400)
+    check(
+        "'Clear search' restores the rows",
+        p.locator(".view.on .tbl-row").count() > 3 and p.input_value("#search") == "",
+    )
+    # header actions
+    p.click(".runcmd")
+    p.wait_for_timeout(200)
+    check("clicking the command copies it and confirms with a toast", p.locator(".toast.on").count() == 1)
+    s.tab("overview")
+    check("switching views resets the scroll position", p.evaluate("document.querySelector('#main').scrollTop") == 0)
+    check("no console errors during the keyboard session", not s.errors, "; ".join(s.errors[:2]))
+    s.page.close()
+
+
 def _chain(model, pid):
     by = {p["id"]: p for p in model["processes"]}
     out, cur = [], by.get(pid)
@@ -491,6 +688,10 @@ def main(demo_dir):
             skip("demo-run checks", f"{demo_dir} not found (record it with tests/fixtures/demo.sh)")
         if Path(demo_dir, "manifest.json").exists():
             run_themes(b, OUT / "demo.html")
+        if Path(demo_dir, "manifest.json").exists():
+            run_keyboard(b, OUT / "demo.html")
+            run_responsive(b, OUT / "demo.html")
+        run_edges(b)
         run_hostile(b)
         run_big(b)
         b.close()

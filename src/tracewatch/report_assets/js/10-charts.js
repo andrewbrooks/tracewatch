@@ -34,13 +34,14 @@ function activityChart(opts) {
     if (S.range) legend.appendChild(h('button', { class: 'btn', type: 'button', style: { marginLeft: 'auto' }, onclick: () => setState({ range: null }) }, 'Clear time range · ' + fmtAt(S.range[0]) + ' – ' + fmtAt(S.range[1])));
   }
   function draw() {
+    if (!DATA.events.length) { clear(legend); clear(holder).appendChild(emptyState('timeline', 'No activity to chart', 'The recorder saw no events for this run.')); return; }
     const W = Math.max(320, wrap.clientWidth || 800), pw = W - M.l - M.r, ph = H - M.t - M.b;
     const buckets = bucketize(DATA.events.filter(e => !(e.kind === 'udp' && e.detail.probe && !S.probes)), N);
     const on = KINDS.filter(k => S.kinds[k.id]);
     const totals = Object.fromEntries(KINDS.map(k => [k.id, buckets.reduce((a, b) => a + b.c[k.id], 0)]));
     legendDraw(totals);
     const maxc = Math.max(1, ...buckets.map(b => on.reduce((a, k) => a + b.c[k.id], 0)));
-    const ticks = niceTicks(maxc, 4), ymax = ticks[ticks.length - 1] || 1, sy = ph / ymax, bw = pw / N, thick = Math.min(24, bw - 2);
+    const ticks = intTicks(maxc, 4), ymax = ticks[ticks.length - 1] || 1, sy = ph / ymax, bw = pw / N, thick = Math.min(24, bw - 2);
     const x = t => M.l + (t / DUR) * pw;
     svg = s('svg', { class: 'chart', width: W, height: H, viewBox: `0 0 ${W} ${H}`, role: 'img', 'aria-label': 'Activity over time by event kind. Use the table view for the exact numbers.' });
     const ax = s('g', { class: 'axis' });
@@ -59,6 +60,12 @@ function activityChart(opts) {
         const d = top ? `M${bx},${yTop + hh}V${yTop + r}Q${bx},${yTop} ${bx + r},${yTop}H${bx + thick - r}Q${bx + thick},${yTop} ${bx + thick},${yTop + r}V${yTop + hh}Z` : `M${bx},${yTop}h${thick}v${hh}h${-thick}Z`;
         bars.appendChild(s('path', { d, fill: KC[k.id] }));
       });
+    }
+    if (DATA.integrity.untrusted_after_mono) {   // the recorder had died: everything right of this line is unverified
+      const ux = x(untrustedAt()), nearEdge = ux > W - M.r - 90;
+      svg.appendChild(s('rect', { x: ux, y: M.t, width: Math.max(0, W - M.r - ux), height: ph, fill: ink(0.07), 'pointer-events': 'none' }));
+      svg.appendChild(s('line', { x1: ux, x2: ux, y1: M.t, y2: M.t + ph, stroke: cssv('--critical'), 'stroke-width': 1.5, 'pointer-events': 'none' }));
+      svg.appendChild(s('text', { x: nearEdge ? ux - 6 : ux + 6, y: M.t + 12, 'text-anchor': nearEdge ? 'end' : 'start', fill: cssv('--t-critical'), 'font-size': 10.5, 'font-weight': 700, 'pointer-events': 'none' }, 'UNTRUSTED'));
     }
     // hover layer: crosshair band + tooltip listing every kind at that bucket
     const band = s('rect', { y: M.t, height: ph, width: bw, fill: ink(0.06), display: 'none', 'pointer-events': 'none' });
@@ -99,7 +106,7 @@ function rankedBars(items, opts) {
   opts = opts || {};
   const max = Math.max(1, ...items.map(i => i.value));
   const wrap = h('div', { role: 'list' });
-  if (!items.length) return h('div', { class: 'empty' }, opts.empty || 'Nothing recorded');
+  if (!items.length) return h('div', { class: 'emptystate compact' }, icon('info', 24), h('p', null, opts.empty || 'Nothing recorded'));
   for (const it of items) {
     const row = h('div', { class: 'bar-row' + (it.flag ? ' direct' : ''), role: 'listitem', tabindex: '0', onclick: it.onclick, onkeydown: ev => { if (ev.key === 'Enter' && it.onclick) it.onclick(); } },
       h('div', { class: 'n', title: it.label }, it.flag ? h('span', { class: 'sev sev-medium', style: { marginRight: '6px' } }, 'DIRECT') : null, it.label),
@@ -118,6 +125,8 @@ function rankedTable(items, cols) {
 
 /* coverage strip: where the recording is trustworthy and where it has gaps */
 const relMono = m => m + DATA.clock.offset_ns - DATA.clock.t0_tracee_ns;
+// where the trusted part of the recording ends, clamped into the run so a clock oddity can never print an absurd time
+const untrustedAt = () => DATA.integrity.untrusted_after_mono ? Math.min(DUR, Math.max(0, relMono(DATA.integrity.untrusted_after_mono))) : null;
 function coverageStrip() {
   const lanes = [['Kernel', 'tracee'], ['Proxy', 'proxy'], ['Recorder', 'recorder']];
   const gaps = DATA.integrity.gaps || [];
@@ -132,7 +141,15 @@ function coverageStrip() {
       gap.addEventListener('pointerleave', hideTip);
       lane.appendChild(gap);
     }
+    if (DATA.integrity.untrusted_after_mono) {
+      const ua = untrustedAt();
+      const band = h('div', { class: 'untrusted', style: { left: (100 * ua / DUR) + '%', width: (100 - 100 * ua / DUR) + '%' } });
+      band.addEventListener('pointermove', ev => showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv' }, 'Untrusted'), h('div', { class: 'tl' }, 'The recorder had died: nothing after ' + fmtAt(ua) + ' can be vouched for.')]));
+      band.addEventListener('pointerleave', hideTip);
+      lane.appendChild(band);
+    }
     wrap.appendChild(h('div', null, label)); wrap.appendChild(lane);
   }
+  if (DATA.integrity.untrusted_after_mono) wrap.appendChild(h('div', { class: 'cov-note' }, 'Hatched with a red edge: the recorder died here; data after it is untrusted.'));
   return wrap;
 }

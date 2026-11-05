@@ -58,6 +58,12 @@ function niceTicks(max, n) {
   for (let v = 0; v <= max + step * 0.999; v += step) out.push(Math.round(v * 1e6) / 1e6);
   return out;
 }
+function intTicks(max, n) {                 // y ticks for COUNTS: whole numbers only (0.5 events is meaningless)
+  if (max <= 1) return [0, 1];
+  const step = Math.max(1, Math.ceil(niceTicks(max, n)[1] || 1));
+  const out = []; for (let v = 0; v <= max + step - 1; v += step) out.push(v);
+  return out;
+}
 function timeTicks(d0, d1, n) {            // nice ticks in ns for a time axis
   const span = Math.max(1, d1 - d0), units = [1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 2e9, 5e9, 1e10, 3e10, 6e10, 3e11, 6e11];
   let step = units.find(u => span / u <= n) || units[units.length - 1];
@@ -162,6 +168,20 @@ function chainOf(pid) { const out = []; let p = P.get(pid); while (p) { out.unsh
 function descendants(pid) { const out = []; const st = [pid]; while (st.length) { const p = P.get(st.pop()); if (!p) continue; for (const c of p.children) { out.push(c); st.push(c); } } return out; }
 const pLabel = id => { const p = P.get(id); return p ? p.name + ' · ' + p.pid : 'unattributed'; };
 
+/* ---------- empty states, toast, clipboard ---------- */
+function emptyState(ic, title, text, action) {
+  return h('div', { class: 'emptystate', role: 'status' }, icon(ic, 34), h('h3', null, title), text ? h('p', null, text) : null, action || null);
+}
+const toastEl = h('div', { class: 'toast', role: 'status', 'aria-live': 'polite' });
+let toastTimer = 0;
+function toast(msg) { toastEl.textContent = msg; toastEl.classList.add('on'); clearTimeout(toastTimer); toastTimer = setTimeout(() => toastEl.classList.remove('on'), 1600); }
+function copyText(text, what) {
+  const ok = () => toast((what || 'Copied') + ' copied to the clipboard'), no = () => toast('Copy is blocked here: select the text and press Ctrl/⌘+C');
+  try { if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text).then(ok, no); return; } } catch (e) { /* fall through */ }
+  no();
+}
+const isEmptyRun = () => DATA.stats.processes === 0 && DATA.stats.events === 0;
+
 /* ---------- state, tooltip, copy ---------- */
 const S = { tab: 'overview', range: null, sel: null, q: '', kinds: Object.fromEntries(KINDS.map(k => [k.id, true])), probes: false, listeners: [] };
 function onState(fn) { S.listeners.push(fn); }
@@ -177,6 +197,6 @@ function showTip(x, y, nodes) {
 }
 function hideTip() { tipEl.style.display = 'none'; }
 function copyBtn(text) {
-  return h('button', { class: 'copy', type: 'button', onclick: ev => { ev.stopPropagation(); (navigator.clipboard?.writeText(text) || Promise.reject()).then(() => flash(ev.target, 'copied'), () => flash(ev.target, 'press ⌘/Ctrl+C')); } }, 'copy');
+  return h('button', { class: 'copy', type: 'button', onclick: ev => { ev.stopPropagation(); copyText(text, 'Text'); flash(ev.target, 'copied'); } }, 'copy');
 }
 function flash(btn, text) { const o = btn.textContent; btn.textContent = text; setTimeout(() => { btn.textContent = o; }, 1100); }

@@ -78,7 +78,12 @@ def test_no_external_resource_references_anywhere(model):
     html = report_html.render(model)
     code = html.split('id="tw-data">')[0] + html.split("</script>", 1)[1]  # everything except the data blob
     assert not re.search(r"(?:src|href)\s*=\s*[\"']?https?:", code, re.I)
-    assert not re.search(r"<link\b|<iframe\b|<embed\b|<object\b|@import|url\(\s*[\"']?https?:", code, re.I)
+    assert not re.search(
+        r"<link\b(?![^>]*\brel=\"icon\" href=\"data:image/svg)"  # only the inline favicon may be a <link>
+        r"|<iframe\b|<embed\b|<object\b|@import|url\(\s*[\"']?https?:",
+        code,
+        re.I,
+    )
     assert (
         "fetch(" not in code and "XMLHttpRequest" not in code and "WebSocket(" not in code and "sendBeacon" not in code
     )

@@ -1,6 +1,9 @@
 /* ===== views ===== */
 const VC = { complete: ['--good', 'check', 'Recording complete'], 'complete-with-losses': ['--warning', 'warn', 'Complete, with losses'], incomplete: ['--critical', 'x', 'Recording incomplete'], 'in-progress': ['--warning', 'warn', 'Recording in progress'], unreadable: ['--critical', 'x', 'Unreadable'] };
-const verdictOf = () => VC[DATA.run.verdict] || VC.unreadable;
+const VC_EMPTY = ['--sev-info', 'info', 'No activity recorded'];
+// An empty recording is not a success: nothing was observed (the command may have failed to start). Broken states still win.
+const verdictOf = () => (isEmptyRun() && !['incomplete', 'unreadable', 'in-progress'].includes(DATA.run.verdict)) ? VC_EMPTY : (VC[DATA.run.verdict] || VC.unreadable);
+const verdictClass = () => (verdictOf() === VC_EMPTY ? 'v-empty' : 'v-' + DATA.run.verdict);
 const viewShell = (id, title, sub, ...kids) => h('div', { class: 'view', id: 'view-' + id }, h('h2', { class: 'vt' }, title), sub ? h('p', { class: 'vsub' }, sub) : null, ...kids);
 const countBy = (arr, f) => { const m = new Map(); for (const x of arr) { const k = f(x); m.set(k, (m.get(k) || 0) + 1); } return m; };
 
@@ -8,14 +11,19 @@ function overviewView() {
   const [vcss, vicon, vlabel] = verdictOf(), st = DATA.stats, fc = st.findings, direct = DATA.destinations.filter(d => d.via === 'direct' && !d.loopback);
   const banner = h('div', { class: 'card banner', style: { '--vc': 'var(' + vcss + ')', '--vct': 'var(' + vcss.replace('--', '--t-') + ')' } }, h('div', { class: 'vi' }, icon(vicon, 38)),
     h('div', null, h('h2', null, vlabel), h('div', { class: 'muted' }, 'Run ' + DATA.run.id + ' · ' + fmtWall(DATA.run.started_wall_ns) + ' · ' + fmtT(DATA.run.duration_ns) + ' · target ' + ((DATA.run.root_exit || {}).status || 'exit not recorded')),
-      DATA.run.reasons.length ? h('ul', null, DATA.run.reasons.map(r => h('li', null, r))) : null));
+      (() => {
+        const lines = [...DATA.run.reasons];
+        if (isEmptyRun()) lines.unshift('The recorder saw no process or network activity. If the command failed to start, its exit status is the place to look.');
+        if (DATA.integrity.untrusted_after_mono) lines.push('Nothing after ' + fmtAt(untrustedAt()) + ' can be trusted: the recorder had already died (hatched in the charts below).');
+        return lines.length ? h('ul', null, lines.map(r => h('li', null, r))) : null;
+      })()));
   const tile = (label, value, sub, glow, go) => h('div', { class: 'card kpi', style: { '--glow': glow, cursor: go ? 'pointer' : 'default' }, onclick: go, role: go ? 'button' : undefined, tabindex: go ? '0' : undefined, onkeydown: go ? (ev => { if (ev.key === 'Enter') go(); }) : undefined }, h('div', { class: 'l' }, label), h('div', { class: 'v num' }, value), h('div', { class: 's' }, sub));
   const tab = t => () => setState({ tab: t });
   const sevPips = ['high', 'medium', 'low', 'info'].filter(k => fc[k]).map(k => h('span', { class: 'sev sev-' + k }, icon(SEVICON[k], 11), String(fc[k])));
   const kpis = h('div', { class: 'kpis' },
     tile('Findings', fmtN(DATA.findings.length), sevPips.length ? sevPips : 'none fired', 'rgba(208,59,59,.16)', tab('findings')),
     tile('Processes', fmtN(st.processes), 'depth ' + st.max_depth + ' · ' + fmtN(st.commands) + ' commands', 'rgba(57,135,229,.16)', tab('tree')),
-    tile('Destinations', fmtN(st.destinations), direct.length ? h('span', { class: 'sev sev-medium' }, icon('warn', 11), direct.length + ' direct') : 'all via proxy', 'rgba(25,158,112,.16)', tab('network')),
+    tile('Destinations', fmtN(st.destinations), direct.length ? h('span', { class: 'sev sev-medium' }, icon('warn', 11), direct.length + ' direct') : (st.destinations ? 'all via proxy' : 'none recorded'), 'rgba(25,158,112,.16)', tab('network')),
     tile('HTTP requests', fmtN(st.http), (DATA.http.filter(x => x.error || (x.status || 0) >= 400).length) + ' errors · ' + st.websockets + ' websockets', 'rgba(217,89,38,.16)', tab('http')),
     tile('DNS names', fmtN(st.dns_names), DATA.dns.resolver_contacts.length + ' resolver contacts', 'rgba(213,81,129,.16)', tab('dns')),
     tile('Watched files', fmtN(st.files), 'credential & temp paths', 'rgba(201,133,0,.16)', tab('files')));
@@ -181,7 +189,7 @@ function runView() {
   const card = (title, ...kids) => h('section', { class: 'card' }, h('div', { class: 'card-h' }, h('h3', null, title)), h('div', { class: 'card-b' }, ...kids));
   const root = viewShell('run', 'Run & integrity', 'How this run was recorded, what can be trusted, and what the recorder could not see.',
     h('div', { class: 'grid g2' },
-      card('Integrity', kv([['Verdict', h('span', { class: 'verdict v-' + r.verdict }, icon(verdictOf()[1], 14), r.verdict)], ['Reasons', r.reasons.length ? h('div', null, r.reasons.map(x => h('div', null, x))) : 'none'], ['Gaps', (ig.gaps || []).length ? h('div', null, ig.gaps.map(g => h('div', null, g.source + ': ' + g.reason))) : 'none'], ['Size caps hit', (r.caps_hit || []).join(', ') || 'none'], ['Lost components', (r.lost_components || []).join(', ') || 'none'],
+      card('Integrity', kv([['Verdict', h('span', { class: 'verdict ' + verdictClass() }, icon(verdictOf()[1], 14), r.verdict)], ['Reasons', r.reasons.length ? h('div', null, r.reasons.map(x => h('div', null, x))) : 'none'], ['Gaps', (ig.gaps || []).length ? h('div', null, ig.gaps.map(g => h('div', null, g.source + ': ' + g.reason))) : 'none'], ['Size caps hit', (r.caps_hit || []).join(', ') || 'none'], ['Lost components', (r.lost_components || []).join(', ') || 'none'],
         ['Unproxied', (ig.unproxied || []).length ? h('div', null, ig.unproxied.map(u => h('div', { class: 'mono' }, `${u.dst}:${u.port} ×${u.count}`))) : 'none']]), h('div', { style: { marginTop: '12px' } }, coverageStrip())),
       card('Recorder', kv([['Run id', r.id], ['Started', fmtWall(r.started_wall_ns) + ' (wall clock, approximate)'], ['Duration', fmtT(r.duration_ns)], ['Command', h('span', { class: 'mono' }, r.cmdline)], ['Working dir', r.cwd], ['Policy', r.policy ? `recorder death → ${r.policy.on_recorder_death}; component loss → ${r.policy.on_component_loss}` : null],
         ['Tracee', r.versions && r.versions.tracee ? (r.versions.tracee.version || '') + ' · ' + short((r.versions.tracee.digest || '').split('@').pop(), 20) : null], ['mitmproxy', r.versions ? r.versions.mitmproxy : null], ['tracewatch', DATA.generator.tracewatch], ['Clock alignment', `${clk.source}${clk.votes ? ' · ' + clk.votes + ' anchor(s)' : ''}`],

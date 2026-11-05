@@ -1,11 +1,11 @@
 /* ===== virtualised, sortable table. rows() is re-evaluated on refresh() so filters always apply. ===== */
 function vtable(cfg) {
-  const ROWH = cfg.rowHeight || 32;
+  const ROWH = matchMedia('(pointer: coarse)').matches ? Math.max(cfg.rowHeight || 32, 40) : (cfg.rowHeight || 32);
   let sortKey = cfg.defaultSort || null, sortDir = cfg.defaultDir || 1, data = [], raf = 0;
   const grid = cfg.cols.map(c => c.w || '1fr').join(' ');
   const head = h('div', { class: 'tbl-head', style: { gridTemplateColumns: grid, minWidth: cfg.minWidth || '0' }, role: 'row' });
   const body = h('div', { class: 'tbl-body', role: 'rowgroup' });
-  const empty = h('div', { class: 'empty', style: { display: 'none' } }, cfg.empty || 'Nothing to show');
+  const empty = h('div', { style: { display: 'none' } });
   const wrap = h('div', { class: 'tbl-wrap', style: { flex: '1', minHeight: '160px', maxHeight: cfg.maxHeight || 'none' }, role: 'table', 'aria-label': cfg.label || 'table' }, head, body, empty);
   const count = h('span', { class: 'muted num' });
   for (const c of cfg.cols) {
@@ -15,23 +15,38 @@ function vtable(cfg) {
     data = cfg.rows().slice();
     const col = cfg.cols.find(c => c.key === sortKey);
     if (col && col.sort) data.sort((a, b) => { const x = col.sort(a), y = col.sort(b); return (x < y ? -1 : x > y ? 1 : 0) * sortDir; });
-    $$('button', head).forEach((b, i) => { const c = cfg.cols[i]; b.textContent = c.label + (sortKey === c.key ? (sortDir > 0 ? ' ▲' : ' ▼') : ''); });
+    $$('button', head).forEach((b, i) => { const c = cfg.cols[i]; b.textContent = c.label + (sortKey === c.key ? (sortDir > 0 ? ' ▲' : ' ▼') : ''); b.setAttribute('aria-sort', sortKey === c.key ? (sortDir > 0 ? 'ascending' : 'descending') : 'none'); });
     body.style.height = data.length * ROWH + 'px'; empty.style.display = data.length ? 'none' : 'block';
+    if (!data.length) {   // say WHY it is empty: nothing recorded, or the user's own filter excluded everything
+      clear(empty);
+      if (S.q || S.range) empty.appendChild(emptyState('search', S.q ? 'No matches for “' + short(S.q, 40) + '”' : 'Nothing in the selected time range', 'Your ' + (S.q ? 'search' : 'time range') + ' is hiding every row.', h('button', { class: 'btn', type: 'button', onclick: () => { const i = $('#search'); if (i) i.value = ''; setState({ q: '', range: null }); } }, 'Clear search and time range')));
+      else empty.appendChild(emptyState('info', cfg.empty || 'Nothing to show', 'The recorder did not capture anything of this kind in this run.'));
+    }
     count.textContent = fmtN(data.length) + ' row' + (data.length === 1 ? '' : 's');
     if (cfg.onCount) cfg.onCount(data.length);
     paint();
   }
   function paint() {
+    const keep = body.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.i : null;
     const top = wrap.scrollTop, vh = wrap.clientHeight || 400, i0 = Math.max(0, Math.floor(top / ROWH) - 6), i1 = Math.min(data.length, Math.ceil((top + vh) / ROWH) + 6);
     clear(body);
     for (let i = i0; i < i1; i++) {
       const r = data[i], sel = cfg.isSelected && cfg.isSelected(r);
       const row = h('div', { class: 'tbl-row' + (sel ? ' sel' : ''), role: 'row', tabindex: '0', style: { top: i * ROWH + 'px', gridTemplateColumns: grid, minWidth: cfg.minWidth || '0', height: ROWH + 'px' }, 'aria-selected': String(!!sel),
-        onclick: () => cfg.onSelect && cfg.onSelect(r), onkeydown: ev => { if (ev.key === 'Enter') cfg.onSelect && cfg.onSelect(r); } });
-      for (const c of cfg.cols) { const cell = h('div', { role: 'cell', class: c.cls || '' }); const v = c.render(r); if (v instanceof Node) cell.appendChild(v); else cell.textContent = v === undefined || v === null ? '' : String(v); row.appendChild(cell); }
+        onclick: () => cfg.onSelect && cfg.onSelect(r), onkeydown: ev => { if (ev.key === 'Enter') { ev.preventDefault(); cfg.onSelect && cfg.onSelect(r); } } });
+      row.dataset.i = i; row.dataset.fk = 'r:' + cfg.label + ':' + i;
+      for (const c of cfg.cols) { const cell = h('div', { role: 'cell', class: c.cls || '' }); const v = c.render(r); if (v instanceof Node) cell.appendChild(v); else { cell.textContent = v === undefined || v === null ? '' : String(v); if (cell.textContent.length > 18) cell.title = cell.textContent; } row.appendChild(cell); }
       body.appendChild(row);
     }
+    if (keep !== null) { const el = body.querySelector('[data-i="' + keep + '"]'); if (el) el.focus({ preventScroll: true }); }
   }
+  wrap.addEventListener('keydown', ev => {
+    const row = ev.target.closest && ev.target.closest('.tbl-row'); if (!row) return;
+    const i = +row.dataset.i, move = { ArrowDown: 1, ArrowUp: -1, PageDown: 10, PageUp: -10, Home: -1e9, End: 1e9 }[ev.key]; if (!move) return;
+    ev.preventDefault(); const j = Math.max(0, Math.min(data.length - 1, i + move));
+    if (j * ROWH < wrap.scrollTop || (j + 2) * ROWH > wrap.scrollTop + wrap.clientHeight) wrap.scrollTop = Math.max(0, j * ROWH - wrap.clientHeight / 2);
+    paint(); const el = body.querySelector('[data-i="' + j + '"]'); if (el) el.focus();
+  });
   wrap.addEventListener('scroll', () => { if (raf) return; raf = requestAnimationFrame(() => { raf = 0; paint(); }); });
   new ResizeObserver(() => { if (wrap.isConnected) paint(); }).observe(wrap);
   return { el: wrap, refresh, count, repaint: paint, get rows() { return data; } };
@@ -46,7 +61,7 @@ function procLink(id) {
   if (!P.has(id)) return h('span', { class: 'muted' }, 'unattributed');
   return h('span', { class: 'proc-link', title: 'Open process', onclick: ev => { ev.stopPropagation(); setState({ sel: { type: 'proc', id } }); } }, pLabel(id));
 }
-function kindCell(e) { const kk = KINDS.find(z => z.id === groupOf(e)); return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '7px' } }, s('svg', { width: 11, height: 11, viewBox: '0 0 11 11', 'aria-hidden': 'true' }, marker(kk.shape, 5.5, 5.5, 3.6, KC[kk.id])), e.kind === 'exit' ? 'exit' : e.kind === 'udp' ? 'udp' : kk.label); }
+function kindCell(e) { const kk = KINDS.find(z => z.id === groupOf(e)); return h('span', { style: { display: 'inline-flex', alignItems: 'center', gap: '7px' } }, s('svg', { width: 11, height: 11, viewBox: '0 0 11 11', 'aria-hidden': 'true' }, marker(kk.shape, 5.5, 5.5, 3.6, KC[kk.id])), e.kind === 'exit' ? 'Exit' : e.kind === 'udp' ? 'UDP' : kk.label); }
 function exitCell(p) {
   if (!p.exit) return h('span', { class: 'muted' }, 'not recorded');
   if (p.exit.signal) return h('span', { class: 'sev sev-high' }, icon('x', 12), p.exit.signal_name);

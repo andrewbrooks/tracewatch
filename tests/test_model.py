@@ -438,3 +438,16 @@ def test_wrapper_child_that_exits_just_after_t0_is_not_part_of_the_target(tmp_pa
     assert 91 not in [p["pid"] for p in m["processes"]] and 92 not in [p["pid"] for p in m["processes"]]
     assert 93 in [p["pid"] for p in m["processes"]]
     assert all(p["end"] is None or p["end"] >= p["start"] for p in m["processes"])
+
+
+def test_repeated_resolver_contacts_within_50ms_are_one_event_with_a_count(tmp_path):
+    nscd = {"sa_family": "AF_UNIX", "sun_path": "/var/run/nscd/socket"}
+    tr = tree_events() + [
+        sockev(3, 102, 2, T0 + 2 * S, 1, nscd),
+        sockev(3, 102, 2, T0 + 2 * S + 3_000_000, 1, nscd),  # same lookup, second socket call
+        sockev(3, 102, 2, T0 + 2 * S + 900_000_000, 1, nscd),  # a different lookup much later
+    ]
+    m = build(make_run(tmp_path, tr))
+    dns = [e for e in m["events"] if e["kind"] == "dns" and e["sub"] == "resolver"]
+    assert [e["detail"]["count"] for e in dns] == [2, 1] and dns[0]["title"].endswith("×2")
+    assert m["dns"]["resolver_contacts"][0]["count"] == 3  # the aggregate still counts every contact

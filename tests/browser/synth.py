@@ -52,3 +52,19 @@ def big_run(tmp: Path, nproc: int = 1500, nev: int = 6000) -> Path:
             tr.append(tcpev(i, 100 + i, parent, T0 + i * 1_000_000 + 10_000_000, f"10.0.{i % 200}.{i % 250}", 443))
     tr.append(exitev(1, 100, 0, T0 + (nproc + 3) * 1_000_000))
     return make_run(tmp, tr)
+
+
+def empty_run(tmp: Path) -> Path:
+    """A recording in which nothing happened (e.g. the command failed to start)."""
+    return make_run(tmp, [])
+
+
+def incomplete_run(tmp: Path) -> Path:
+    """The recorder died: a heartbeat, then a proxy loss, and no run_finished."""
+    evs = [
+        {"kind": "run_started", "t_mono_ns": 1, "t_wall_ns": 1},
+        {"kind": "recording_armed", "t_mono_ns": 2, "t_wall_ns": 1},
+        {"kind": "heartbeat", "t_mono_ns": 3 * 10**9, "t_wall_ns": 1},
+        {"kind": "component_died", "component": "mitm", "t_mono_ns": 4 * 10**9, "t_wall_ns": 1},
+    ]
+    return make_run(tmp, tree_events(), manifest={"status": "running"}, events=evs)

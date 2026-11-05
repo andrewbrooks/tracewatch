@@ -19,10 +19,15 @@ function treeView() {
   const btn = (label, fn, pressed) => h('button', { class: 'btn', type: 'button', onclick: fn, 'aria-pressed': pressed === undefined ? undefined : String(pressed) }, label);
   const flagBtn = btn('Flagged paths only', () => { flaggedOnly = !flaggedOnly; flagBtn.setAttribute('aria-pressed', String(flaggedOnly)); render(true); }, false);
   const info = h('span', { class: 'muted num' });
+  const zl = h('span', { class: 'zl' }, '100%');
+  const zoomBox = h('div', { class: 'zoombox', role: 'group', 'aria-label': 'Zoom' },
+    h('button', { class: 'btn', type: 'button', 'aria-label': 'Zoom out', onclick: () => zoomBy(1 / 1.25) }, '−'), zl,
+    h('button', { class: 'btn', type: 'button', 'aria-label': 'Zoom in', onclick: () => zoomBy(1.25) }, '+'));
   const toolbar = h('div', { class: 'toolbar' },
     btn('Fit all', () => fit(true)), btn('Expand all', () => { collapsed.clear(); render(true); }),
-    btn('Collapse to depth 2', () => { collapsed.clear(); for (const p of DATA.processes) if (p.depth >= 1 && p.children.length) collapsed.add(p.id); render(true); }), flagBtn, info);
+    btn('Collapse to depth 2', () => { collapsed.clear(); for (const p of DATA.processes) if (p.depth >= 1 && p.children.length) collapsed.add(p.id); render(true); }), flagBtn, info, zoomBox);
   const root = h('div', { class: 'view fill', id: 'view-tree' }, toolbar, canvas);
+  if (!DATA.processes.length) canvas.appendChild(emptyState('tree', 'No processes were recorded', 'The target\'s exec was never seen by the kernel trace. If the command failed to start, check the Run tab for its exit status and the recorder\'s notes.'));
 
   const flaggedSet = (() => {                       // processes with a medium+ finding, and every ancestor of one
     const f = new Set(); for (const p of DATA.processes) if (p.severity === 'medium' || p.severity === 'high') for (const c of chainOf(p.id)) f.add(c.id); return f;
@@ -41,12 +46,16 @@ function treeView() {
     for (const p of DATA.processes) if (!p.parent && vis(p.id)) { place(p, 0); leaf += ROOT_GAP / (NH + GY); }
     return { w: maxX, h: Math.max(NH, leaf * (NH + GY)) };
   }
-  function apply() { world.setAttribute('transform', `translate(${tx},${ty}) scale(${k})`); }
+  function apply() { world.setAttribute('transform', `translate(${tx},${ty}) scale(${k})`); zl.textContent = Math.round(k * 100) + '%'; }
+  function zoomBy(f, cx, cy) {
+    const W = canvas.clientWidth, H = canvas.clientHeight, mx = cx ?? W / 2, my = cy ?? H / 2, nk = Math.max(0.15, Math.min(2.6, k * f));
+    tx = mx - (mx - tx) * (nk / k); ty = my - (my - ty) * (nk / k); k = nk; apply();
+  }
   function fit(full) {
     const b = layout(), W = canvas.clientWidth || 900, H = canvas.clientHeight || 500;
     if (full) { k = Math.min(1, Math.max(0.12, Math.min((W - 60) / b.w, (H - 60) / b.h))); tx = 30; ty = 30 + Math.max(0, (H - 60 - b.h * k) / 2); }
     else {                                       // readable by default, centred on the root; "Fit all" zooms out
-      k = Math.min(1, Math.max(0.85, (W - 60) / b.w)); tx = 30;
+      k = Math.min(1, Math.max(W < 600 ? 0.6 : 0.85, (W - 60) / b.w)); tx = 30;
       const r = DATA.processes.find(p => !p.parent && pos.get(p.id)), rn = r && pos.get(r.id);
       ty = rn ? Math.max(Math.min(30, H / 2 - (rn.y + NH / 2) * k), H / 2 - (rn.y + NH / 2) * k) : 30;
     }
@@ -57,7 +66,35 @@ function treeView() {
     if (p.exit.signal) return { t: p.exit.signal_name.replace('SIG', ''), c: cssv('--t-critical') };
     return p.exit.code === 0 ? { t: 'exit 0', c: cssv('--text-3') } : { t: 'exit ' + p.exit.code, c: cssv('--t-serious') };
   }
+  const nodeEls = new Map();
+  const focusId = () => (S.sel && S.sel.type === 'proc' && pos.has(S.sel.id)) ? S.sel.id : ((DATA.processes.find(p => !p.parent && pos.has(p.id)) || {}).id || null);
+  function ensureVisible(id) {
+    const n = pos.get(id); if (!n) return; const W = canvas.clientWidth, H = canvas.clientHeight, m = 40;
+    const x0 = tx + n.x * k, x1 = tx + (n.x + NW) * k, y0 = ty + n.y * k, y1 = ty + (n.y + NH) * k;
+    if (x0 < m) tx += m - x0; else if (x1 > W - m) tx -= x1 - (W - m);
+    if (y0 < m) ty += m - y0; else if (y1 > H - m) ty -= y1 - (H - m);
+    apply();
+  }
+  function goto_(id) {   // move keyboard focus to a node (and keep it on screen)
+    const el = nodeEls.get(id); if (!el) return;
+    for (const [i, e] of nodeEls) e.setAttribute('tabindex', i === id ? '0' : '-1');
+    el.focus({ preventScroll: true }); ensureVisible(id);
+  }
+  function nodeKey(ev, id) {
+    const n = pos.get(id), p = n.p; let t = null;
+    if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setState({ sel: { type: 'proc', id } }); return; }
+    if (ev.key === 'ArrowRight') { if (p.children.length && collapsed.has(id)) { collapsed.delete(id); render(); goto_(id); ev.preventDefault(); return; } t = n.kids[0] && n.kids[0].p.id; }
+    else if (ev.key === 'ArrowLeft') { if (p.children.length && !collapsed.has(id)) { collapsed.add(id); render(); goto_(id); ev.preventDefault(); return; } t = p.parent && pos.has(p.parent) ? p.parent : null; }
+    else if (ev.key === 'ArrowDown' || ev.key === 'ArrowUp') {
+      const col = [...pos.values()].filter(z => z.depth === n.depth).sort((a, b) => a.y - b.y), i = col.indexOf(n);
+      const nx = col[i + (ev.key === 'ArrowDown' ? 1 : -1)]; t = nx && nx.p.id;
+    } else if (ev.key === 'Home') t = [...pos.values()].sort((a, b) => a.depth - b.depth || a.y - b.y)[0].p.id;
+    else return;
+    ev.preventDefault(); if (t) goto_(t);
+  }
   function render(refit) {
+    const hadFocus = canvas.contains(document.activeElement) ? (document.activeElement.closest && document.activeElement.closest('.node')) : null, hadId = hadFocus ? [...nodeEls].find(([, el]) => el === hadFocus)?.[0] : null;
+    nodeEls.clear();
     const b = layout(), m = matches(), sel = S.sel && S.sel.type === 'proc' ? S.sel.id : null;
     const path = new Set(sel ? chainOf(sel).map(p => p.id) : []), sub = new Set(sel ? [sel, ...descendants(sel)] : []);
     clear(edgeG); clear(nodeG);
@@ -73,7 +110,7 @@ function treeView() {
     for (const [id, n] of pos) {
       const p = n.p, sevc = p.severity ? SEVC[p.severity] : null, ex = exitTag(p), ev = evByProc.get(id) || [];
       const cnt = k_ => ev.filter(e => groupOf(e) === k_ && e.kind !== 'exit' && !(e.kind === 'udp' && e.detail.probe)).length;
-      const g = s('g', { class: 'node' + (id === sel ? ' sel' : '') + (path.has(id) && id !== sel ? ' onpath' : '') + (p.severity === 'high' || p.severity === 'medium' ? ' flag-' + p.severity : '') + (m && !m.has(id) ? ' dimmed' : ''), transform: `translate(${n.x},${n.y})`, tabindex: '0', role: 'treeitem', 'aria-label': `${p.name} pid ${p.pid}, ${p.exit ? p.exit.status : 'no exit recorded'}${p.severity ? ', ' + p.severity + ' severity finding' : ''}`, 'aria-selected': String(id === sel) });
+      const g = s('g', { class: 'node' + (id === sel ? ' sel' : '') + (path.has(id) && id !== sel ? ' onpath' : '') + (p.severity === 'high' || p.severity === 'medium' ? ' flag-' + p.severity : '') + (m && !m.has(id) ? ' dimmed' : ''), transform: `translate(${n.x},${n.y})`, tabindex: id === focusId() ? '0' : '-1', 'data-fk': 'n:' + id, role: 'treeitem', 'aria-label': `${p.name} pid ${p.pid}, ${p.exit ? p.exit.status : 'no exit recorded'}${p.severity ? ', ' + p.severity + ' severity finding' : ''}`, 'aria-selected': String(id === sel) });
       g.appendChild(s('rect', { class: 'nbox', width: NW - 8, height: NH, rx: 9 }));
       const inner = s('g', { 'clip-path': 'url(#nclip)' });
       if (sevc) inner.appendChild(s('rect', { x: 0, y: 0, width: 4, height: NH, fill: sevc }));
@@ -100,20 +137,32 @@ function treeView() {
         g.appendChild(cg);
       }
       g.addEventListener('click', () => setState({ sel: { type: 'proc', id } }));
-      g.addEventListener('keydown', ev => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); setState({ sel: { type: 'proc', id } }); } });
+      g.addEventListener('keydown', ev => nodeKey(ev, id));
+      nodeEls.set(id, g);
       g.addEventListener('pointermove', ev => showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv' }, p.name + ' · ' + p.pid), h('div', { class: 'tt' }, short(oneLine(p.cmdline), 220)), h('div', { class: 'tl' }, (p.exit ? p.exit.status : 'no exit recorded') + ' · ' + fmtAt(p.start) + ' → ' + fmtAt(p.end))]));
       g.addEventListener('pointerleave', hideTip);
       nodeG.appendChild(g);
     }
-    info.textContent = `${count} of ${DATA.processes.length} processes shown`;
+    info.textContent = `${count} of ${DATA.processes.length} processes shown` + (m ? ` · ${[...m].filter(i => pos.has(i)).length} match${m.size === 1 ? '' : 'es'} for “${short(S.q, 24)}”` : '');
+    if (hadId && nodeEls.has(hadId)) nodeEls.get(hadId).focus({ preventScroll: true });
     if (refit) fit();
     first = false;
   }
   /* pan / zoom */
-  let drag = null;
-  canvas.addEventListener('pointerdown', ev => { if (ev.target.closest('.node')) return; drag = { x: ev.clientX, y: ev.clientY, tx, ty }; canvas.classList.add('drag'); canvas.setPointerCapture(ev.pointerId); });
-  canvas.addEventListener('pointermove', ev => { if (!drag) return; tx = drag.tx + ev.clientX - drag.x; ty = drag.ty + ev.clientY - drag.y; apply(); });
-  canvas.addEventListener('pointerup', () => { drag = null; canvas.classList.remove('drag'); });
+  let drag = null, pinch = null; const ptrs = new Map();
+  canvas.addEventListener('pointerdown', ev => {
+    ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (ptrs.size === 2) { const [a, b] = [...ptrs.values()]; pinch = { d: Math.hypot(a.x - b.x, a.y - b.y), k }; drag = null; canvas.setPointerCapture(ev.pointerId); return; }
+    if (ev.target.closest('.node')) return;
+    drag = { x: ev.clientX, y: ev.clientY, tx, ty }; canvas.classList.add('drag'); canvas.setPointerCapture(ev.pointerId);
+  });
+  canvas.addEventListener('pointermove', ev => {
+    if (ptrs.has(ev.pointerId)) ptrs.set(ev.pointerId, { x: ev.clientX, y: ev.clientY });
+    if (pinch && ptrs.size === 2) { const [a, b] = [...ptrs.values()], r = canvas.getBoundingClientRect(); zoomBy((pinch.k * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d) / k, (a.x + b.x) / 2 - r.left, (a.y + b.y) / 2 - r.top); return; }
+    if (!drag) return; tx = drag.tx + ev.clientX - drag.x; ty = drag.ty + ev.clientY - drag.y; apply();
+  });
+  const endPtr = ev => { ptrs.delete(ev.pointerId); if (ptrs.size < 2) pinch = null; if (!ptrs.size) { drag = null; canvas.classList.remove('drag'); } };
+  canvas.addEventListener('pointerup', endPtr); canvas.addEventListener('pointercancel', endPtr);
   canvas.addEventListener('wheel', ev => {
     ev.preventDefault(); const r = canvas.getBoundingClientRect(), mx = ev.clientX - r.left, my = ev.clientY - r.top, nk = Math.max(0.15, Math.min(2.6, k * Math.exp(-ev.deltaY * 0.0016)));
     tx = mx - (mx - tx) * (nk / k); ty = my - (my - ty) * (nk / k); k = nk; apply();

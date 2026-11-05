@@ -85,7 +85,7 @@ function timelineView() {
     spacer = s('rect', { x: 0, y: 0, width: 1, height: 1, fill: 'transparent' });
     clear(scroller).appendChild(bodySvg);
     drawRows();
-    if (!rows.length) scroller.appendChild(h('div', { class: 'empty' }, 'No processes match the current filters.'));
+    if (!rows.length) scroller.appendChild(DATA.processes.length ? emptyState('search', 'No processes match', 'The current search, kind or flagged-only filters hide every lane.', h('button', { class: 'btn', type: 'button', onclick: () => { const i = $('#search'); if (i) i.value = ''; setState({ q: '', range: null, kinds: Object.fromEntries(KINDS.map(k => [k.id, true])) }); } }, 'Reset filters')) : emptyState('timeline', 'No processes were recorded', 'There is nothing to lay out on a timeline.'));
     const rowAt = ev => { const r = bodySvg.getBoundingClientRect(); return rows[Math.floor((ev.clientY - r.top) / ROW)] || null; };
     bodySvg.addEventListener('pointermove', ev => {
       const r = rowAt(ev); if (!r) { hideTip(); return; }

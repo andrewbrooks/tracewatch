@@ -203,6 +203,19 @@ def build(run_dir: Path | str) -> dict:
         ev.append(e)
         return e
 
+    last_resolver: dict[tuple, dict] = {}
+
+    def add_resolver(t: int, proc: dict | None, resolver: str, title: str, **detail) -> None:
+        """glibc makes several socket calls per lookup; contacts with the same resolver by the same process within
+        50 ms are ONE event with a count, so the log shows the lookup once, not as an echo."""
+        key = (proc["id"] if proc else None, resolver)
+        prev = last_resolver.get(key)
+        if prev is not None and t - prev["t"] <= 50_000_000:
+            prev["detail"]["count"] += 1
+            prev["title"] = f"{title} ×{prev['detail']['count']}"
+            return
+        last_resolver[key] = add(t, "dns", proc, title, "resolver", resolver=resolver, count=1, **detail)
+
     by_eid = {p["_eid"]: p for p in procs}
     dns_probe_until: dict[int, int] = {}  # eid -> abs ts until which UDP connects are lookup probes
     ca_path = str(run_dir.resolve() / "ca" / "mitmproxy-ca-cert.pem")
@@ -244,7 +257,7 @@ def build(run_dir: Path | str) -> dict:
                 if res and p:
                     dns_probe_until[p["_eid"]] = e["timestamp"] + PROBE_WINDOW_NS
                 if res:
-                    add(t, "dns", p, f"lookup via {res}", "resolver", resolver=res, path=path)
+                    add_resolver(t, p, res, f"lookup via {res}", path=path)
                 else:
                     add(t, "unix", p, path or "(abstract)", path=path)
             elif fam in ("AF_INET", "AF_INET6") and typ == 2:
@@ -252,7 +265,7 @@ def build(run_dir: Path | str) -> dict:
                 port = int(ra.get("sin_port") or ra.get("sin6_port") or 0)
                 if port == 53 and p:
                     dns_probe_until[p["_eid"]] = e["timestamp"] + PROBE_WINDOW_NS
-                    add(t, "dns", p, f"query sent to resolver {ip}", "resolver", resolver=f"{ip}:53", ip=ip)
+                    add_resolver(t, p, f"{ip}:53", f"query sent to resolver {ip}", ip=ip)
                 else:
                     probe = bool(p and e["timestamp"] <= dns_probe_until.get(p["_eid"], 0))
                     if probe:
@@ -722,7 +735,7 @@ def _dns(ev: list[dict], resolved: dict, udp_probes: Counter, ip_to_name: dict[s
             c = contacts.setdefault(
                 k, {"proc": e["proc"], "resolver": e["detail"]["resolver"], "count": 0, "first_t": e["t"]}
             )
-            c["count"] += 1
+            c["count"] += e["detail"].get("count", 1)
     probes = sum(udp_probes.values())
     return {
         "resolved": sorted(resolved.values(), key=lambda x: (x["ip_literal"], -x["count"], x["name"])),

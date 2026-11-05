@@ -1,5 +1,6 @@
 /* ===== detail drawer: process / event / http / finding / destination ===== */
-const drawerEl = h('aside', { id: 'drawer', 'aria-label': 'Details', role: 'complementary' });
+const drawerEl = h('aside', { id: 'drawer', 'aria-label': 'Details', role: 'dialog', 'aria-modal': 'false', tabindex: '-1' });
+let drawerOpener = null, drawerOpenerKey = null, drawerWasOpen = false;
 const closeDrawer = () => setState({ sel: null });
 function kv(rows) {
   const g = h('div', { class: 'kv' });
@@ -117,5 +118,18 @@ function syncDrawer() {
     else if (sel.type === 'dest') content = destDrawer(DATA.destinations[sel.id]);
   }
   clear(drawerEl);
-  if (content) { add(drawerEl, content); drawerEl.classList.add('open'); drawerEl.setAttribute('aria-hidden', 'false'); } else { drawerEl.classList.remove('open'); drawerEl.setAttribute('aria-hidden', 'true'); }
+  if (content) {
+    if (!drawerWasOpen) { drawerOpener = document.activeElement; drawerOpenerKey = (drawerOpener && drawerOpener.getAttribute && (drawerOpener.getAttribute('data-fk') || drawerOpener.dataset.fk)) || null; }   // remember who opened it so Esc can hand focus back
+    add(drawerEl, content); drawerEl.classList.add('open'); drawerEl.removeAttribute('aria-hidden'); drawerEl.removeAttribute('inert');
+    // defer: moving focus inside the SAME keystroke would hand that Enter's click to the close button and shut the drawer
+    const first = $('.dh .iconbtn', drawerEl); if (!drawerWasOpen && first) setTimeout(() => first.focus({ preventScroll: true }), 30);
+    drawerWasOpen = true;
+  } else {
+    drawerEl.classList.remove('open'); drawerEl.setAttribute('aria-hidden', 'true'); drawerEl.setAttribute('inert', '');   // hidden content must not be tabbable
+    if (drawerWasOpen) {   // the opener may have been re-rendered (new element, same key): find it again
+      const back = (drawerOpener && document.contains(drawerOpener)) ? drawerOpener : (drawerOpenerKey ? document.querySelector('[data-fk="' + drawerOpenerKey.replace(/"/g, '\\"') + '"]') : null);
+      if (back && back.focus) back.focus({ preventScroll: true });
+    }
+    drawerWasOpen = false; drawerOpener = null; drawerOpenerKey = null;
+  }
 }
