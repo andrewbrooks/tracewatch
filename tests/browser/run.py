@@ -649,6 +649,56 @@ def run_print(b, path):
     s.page.close()
 
 
+def run_story(b, path):
+    """The Overview's "How it unfolded" chain: ordered, clickable, keyboard-reachable, and fits every width."""
+    s = Session(b, path)
+    p = s.page
+    n = p.locator(".story-node").count()
+    check(f"the Overview shows a chain of notable steps ({n})", n >= 3)
+    ts = p.evaluate(
+        "[...document.querySelectorAll('.story-node .story-meta')].map(e => parseFloat(e.textContent.replace('+', '')))"
+    )
+    check("the steps are in time order", ts == sorted(ts))
+    check(
+        "a high-severity step is visibly stronger than a medium one (different border colour)",
+        p.evaluate(
+            "(() => { const a = document.querySelector('.story-node.st-high'), b = document.querySelector('.story-node.st-medium'); return !a || !b || getComputedStyle(a).borderLeftColor !== getComputedStyle(b).borderLeftColor; })()"
+        ),
+    )
+    check(
+        "connectors carry the time gap between steps as text",
+        p.locator(".story-gap").count() == n - 1
+        and "ms" in p.locator(".story-gap").first.inner_text()
+        or "s" in p.locator(".story-gap").first.inner_text(),
+    )
+    first = p.locator(".story-node").first
+    title = first.get_attribute("title")
+    first.focus()
+    p.keyboard.press("Enter")
+    p.wait_for_timeout(500)
+    check(
+        "Enter on a step opens that finding's details",
+        p.locator("#drawer.open").count() == 1 and title.split(" (")[0][:20] in p.locator("#drawer").inner_text(),
+    )
+    p.keyboard.press("Escape")
+    check(
+        "the step stays focusable after the drawer closes",
+        p.evaluate("document.activeElement.classList.contains('story-node')"),
+    )
+    check("no console errors", not s.errors, "; ".join(s.errors[:2]))
+    s.page.close()
+    for w, h, label in ((390, 844, "phone"), (820, 1000, "tablet")):
+        s = Session(b, path, width=w, height=h)
+        p = s.page
+        over = p.evaluate("document.documentElement.scrollWidth - innerWidth")
+        direction = p.evaluate("getComputedStyle(document.querySelector('.story-track')).flexDirection")
+        check(
+            f"[{label}] the chain causes no page overflow and is {'vertical' if w <= 820 else 'horizontal'} ({direction})",
+            over <= 1 and direction == ("column" if w <= 820 else "row"),
+        )
+        s.page.close()
+
+
 def _chain(model, pid):
     by = {p["id"]: p for p in model["processes"]}
     out, cur = [], by.get(pid)
@@ -748,6 +798,7 @@ def main(demo_dir):
             run_keyboard(b, OUT / "demo.html")
             run_responsive(b, OUT / "demo.html")
             run_print(b, OUT / "demo.html")
+            run_story(b, OUT / "demo.html")
         run_edges(b)
         run_hostile(b)
         run_big(b)

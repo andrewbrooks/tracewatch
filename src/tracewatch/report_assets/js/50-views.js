@@ -38,7 +38,8 @@ function overviewView() {
   const top = DATA.findings.filter(f => f.severity !== 'info').slice(0, 4);
   const fcard = h('section', { class: 'card' }, h('div', { class: 'card-h' }, h('h3', null, 'Top findings'), h('span', { class: 'cnt' }, fmtN(DATA.findings.length)), h('span', { class: 'sp' }), h('button', { class: 'btn', type: 'button', onclick: tab('findings') }, 'All findings')),
     h('div', { class: 'card-b' }, top.length ? top.map(f => h('div', { style: { cursor: 'pointer' }, onclick: () => setState({ sel: { type: 'finding', id: f.id } }) }, findingCard(f, true))) : h('div', { class: 'empty' }, 'No medium or high indicators fired.')));
-  const root = viewShell('overview', 'Overview', null, banner, kpis, h('div', { class: 'grid', style: { gridTemplateColumns: '1fr' } }, activity), h('div', { class: 'grid g2', style: { marginTop: '14px' } }, destCard, busyCard), h('div', { class: 'grid g2', style: { marginTop: '14px' } }, fcard, cov));
+  const story = storyChain();
+  const root = viewShell('overview', 'Overview', null, banner, kpis, story, h('div', { class: 'grid', style: { gridTemplateColumns: '1fr', marginTop: story ? '14px' : '0' } }, activity), h('div', { class: 'grid g2', style: { marginTop: '14px' } }, destCard, busyCard), h('div', { class: 'grid g2', style: { marginTop: '14px' } }, fcard, cov));
   root.onShow = () => { activity.redraw(); };
   return root;
 }
