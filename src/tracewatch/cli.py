@@ -43,9 +43,16 @@ def main(argv: list[str] | None = None) -> int:
     v = sub.add_parser("verify", help="what can be trusted in a run directory (exit 0 complete .. 4 unreadable)")
     v.add_argument("run_dir")
     v.add_argument("--json", action="store_true")
+    g = sub.add_parser("report", help="render a run directory as a report (html, md, or the raw json model)")
+    g.add_argument("run_dir")
+    g.add_argument("--format", choices=["html", "md", "json"], default="html")
+    g.add_argument("-o", "--output", help="output file (default: <run_dir>/report.<ext>); '-' for stdout")
+    g.add_argument("--open", action="store_true", help="open the result in a browser (html only)")
     s = sub.add_parser("sweep", help="finalize runs whose recorder died, remove leaked containers/proxies")
     s.add_argument("--out", default=DEFAULT_RUNS)
     a = p.parse_args(argv)
+    if a.cmd == "report":
+        return _report(a)
     if a.cmd == "verify":
         import json
 
@@ -98,6 +105,40 @@ def main(argv: list[str] | None = None) -> int:
             ws_msg_cap=a.ws_msg_cap,
         )
     )
+
+
+def _report(a) -> int:
+    import json
+
+    from .model import build
+
+    run_dir = Path(a.run_dir)
+    if not (run_dir / "manifest.json").exists():
+        print(f"tracewatch: {run_dir} is not a run directory (no manifest.json)", file=sys.stderr)
+        return 2
+    model = build(run_dir)
+    if a.format == "json":
+        body = json.dumps(model, indent=1)
+    elif a.format == "md":
+        from .report_md import render
+
+        body = render(model)
+    else:
+        from .report_html import render as render_html
+
+        body = render_html(model)
+    if a.output == "-":
+        sys.stdout.write(body)
+        return 0
+    out = Path(a.output) if a.output else run_dir / f"report.{a.format}"
+    out.write_text(body)
+    out.chmod(0o600)  # a report embeds the (redacted) traffic: as private as the run it came from
+    print(f"tracewatch: wrote {out} ({len(body) // 1024} KB)")
+    if a.open and a.format == "html":
+        import webbrowser
+
+        webbrowser.open(out.resolve().as_uri())
+    return 0
 
 
 if __name__ == "__main__":
