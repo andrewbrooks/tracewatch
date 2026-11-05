@@ -191,8 +191,10 @@ def build(run_dir: Path | str) -> dict:
 
     conn_attr = info.get("connections", {})
 
-    def conn_proc(conn_id: str, t_rel: int) -> tuple[dict | None, dict]:
-        a = conn_attr.get(conn_id) or {}
+    flow_attr = info.get("flows", {})  # per-request overrides: the sender on a socket several processes hold
+
+    def conn_proc(conn_id: str, t_rel: int, flow_id: str | None = None) -> tuple[dict | None, dict]:
+        a = flow_attr.get(flow_id) or conn_attr.get(conn_id) or {}
         return proc_at(a.get("pid"), t_rel), a
 
     # ---- timeline events
@@ -303,7 +305,7 @@ def build(run_dir: Path | str) -> dict:
     for r in fl:
         if r["kind"] == "flow":
             t = rel_proxy(r)
-            p, attr = conn_proc(r["conn_id"], t)
+            p, attr = conn_proc(r["conn_id"], t, r["flow_id"])
             res = results.get(r["flow_id"], {})
             body_in, body_out = r.get("body") or {}, res.get("body") or {}
             is_ws = r["flow_id"] in ws_open
@@ -336,6 +338,8 @@ def build(run_dir: Path | str) -> dict:
                     "method": attr.get("method"),
                     "pid": attr.get("pid"),
                     "candidates": attr.get("candidates", []),
+                    "opener": attr.get("opener"),
+                    "opener_proc": (proc_at(attr["opener"], t) or {}).get("id") if attr.get("opener") else None,
                 },
             }
             http.append(h)

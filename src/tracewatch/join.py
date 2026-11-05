@@ -7,6 +7,8 @@ import sys
 
 WINDOW_NS = 2_000_000_000  # a connect this long before the proxy accepted still counts
 SLACK_NS = 100_000_000  # tolerated clock skew (connect timestamped slightly after accept)
+SEND_SLACK_NS = 10_000_000  # clock-calibration error tolerated when a send looks to be just after the request
+SEND_NAMES = ("sendto", "sendmsg", "sendmmsg", "write", "writev")  # Tracee syscall events: who SENDS on a descriptor
 
 
 def load(path):
@@ -78,6 +80,38 @@ def join_records(fl, tr, proxy_port, info=None, tracee_capped=False):
                     best = i
         return best
 
+    sends: dict[int, list[tuple[int, int]]] = {}  # pid -> [(tracee ts, fd)]
+    for e in tr:
+        if e["eventName"] in SEND_NAMES:
+            fd = next((a["value"] for a in e["args"] if a["name"] in ("sockfd", "fd")), None)
+            if isinstance(fd, int):
+                sends.setdefault(e["processId"], []).append((e["timestamp"], fd))
+    flow_times: dict[str, list[int]] = {}
+    for f in flows:
+        if f.get("t_mono_ns") is not None:
+            flow_times.setdefault(f["conn_id"], []).append(f["t_mono_ns"])
+
+    def writer(f, c):
+        """Several processes hold this socket: who sent THIS request? The last send/write on one of the connection's
+        descriptors before the request reached the proxy (earlier ones may be the opener's CONNECT or handshake).
+        -> None when the socket is not shared, else (pid or None, all holders)."""
+        if offset is None or c is None or f.get("t_mono_ns") is None or f.get("kind") == "connect":
+            return None
+        fds = {int(p): set(v) for p, v in (c.get("holder_fds") or {}).items()}
+        for p, v in (f.get("holders_now") or {}).items():
+            fds.setdefault(int(p), set()).update(v)
+        if len(fds) < 2:
+            return None
+        t = f["t_mono_ns"] + offset
+        before = [x for x in flow_times.get(f["conn_id"], []) if x < f["t_mono_ns"]]
+        lo = max([t - WINDOW_NS] + [x + offset for x in before])
+        hits = [(ts, p) for p in fds for ts, fd in sends.get(p, []) if fd in fds[p] and lo <= ts <= t + SEND_SLACK_NS]
+        # the request cannot have been sent after it arrived: only if nothing was sent before it (clock error)
+        # look a little past it. A later write on the same fd NUMBER is probably a reused descriptor, not this.
+        early = [h for h in hits if h[0] <= t]
+        hits = early or [h for h in hits if h[0] <= t + SEND_SLACK_NS]
+        return (max(hits)[1] if hits else None), sorted(fds)
+
     res = {}
     ordered = sorted(conns.values(), key=when)
     for c in ordered:  # pass 1: connections with socket holders
@@ -111,6 +145,20 @@ def join_records(fl, tr, proxy_port, info=None, tracee_capped=False):
     out = []
     for f in flows:
         r = dict(res.get(f["conn_id"], dict(pid=None, method="no-connection-record", candidates=[])))
+        w = writer(f, conns.get(f["conn_id"]))
+        if w is not None:  # a shared socket: the opener is not necessarily the sender
+            who, holders = w
+            r["opener"] = r["pid"]
+            if who is not None:
+                r.update(pid=who, method="socket-holder+send-event", candidates=holders)
+                if who == r["opener"]:
+                    r["opener"] = None  # the opener also sent: nothing to add
+            else:
+                r.update(method="shared-socket-sender-unknown", candidates=holders)
+            if info is not None and f.get("flow_id"):
+                info.setdefault("flows", {})[f["flow_id"]] = {
+                    k: r[k] for k in ("pid", "method", "candidates", "opener")
+                }
         if r["pid"] is None:
             r["scope"] = "unknown"
         elif r["pid"] in tree:

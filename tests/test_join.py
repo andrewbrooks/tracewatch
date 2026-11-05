@@ -203,3 +203,77 @@ def test_capped_tracee_never_claims_outside_tree():
     capped = by(join_records(fl, [exe(10)], PP, tracee_capped=True))
     assert uncapped["/x"]["scope"] == "outside-tree"
     assert capped["/x"]["scope"] == "unknown-tracee-capped" and capped["/x"]["pid"] == 99
+
+
+# ----------------------------------------------------------------------------- shared sockets: who SENT the request
+def send(pid, t, fd, name="sendto"):
+    arg = "sockfd" if name.startswith("send") else "fd"
+    return {
+        "eventName": name,
+        "processId": pid,
+        "timestamp": t,
+        "processName": "x",
+        "args": [{"name": arg, "value": fd}],
+    }
+
+
+def shared(cid, m, fds, now=None, flow_t=None):
+    """A connection two processes hold; the request reaches the proxy at flow_t."""
+    c = mconn(cid, m, sorted(fds))
+    c["holder_fds"] = {str(p): v for p, v in fds.items()}
+    f = {**flow(cid, "/req"), "flow_id": "F-" + cid, "t_mono_ns": flow_t if flow_t is not None else m + 500_000_000}
+    if now:
+        f["holders_now"] = {str(p): v for p, v in now.items()}
+    return [c, f]
+
+
+def run_shared(fl, extra):
+    """The opener (10) connects once so the clock calibrates; `extra` are the send/write events under test."""
+    m = 100 * S
+    cal = mconn("cal", m - 10 * S, [10])  # a single-holder connection: that is what calibrates the clock
+    tr = [exe(10), connect(10, m - 10 * S + OFF - 1_000_000), connect(10, m + OFF - 1_000_000)] + extra
+    info = {}
+    rows = by(join_records([cal, *fl], tr, PP, info))
+    return rows, info
+
+
+def test_the_sender_not_the_opener_is_named_when_a_child_inherited_the_socket():
+    m = 100 * S
+    fl = shared("a", m, {10: [3]}, now={10: [3], 11: [3]})  # the child (11) only appears at request time
+    rows, info = run_shared(fl, [exe(11), send(11, m + OFF + 400_000_000, 3)])
+    r = rows["/req"]
+    assert r["pid"] == 11 and r["opener"] == 10 and r["method"] == "socket-holder+send-event"
+    assert r["candidates"] == [10, 11] and info["flows"]["F-a"]["pid"] == 11
+
+
+def test_the_last_send_before_arrival_wins_over_an_earlier_handshake_by_the_opener():
+    m = 100 * S
+    fl = shared("a", m, {10: [3], 11: [3]})
+    ev = [exe(11), send(10, m + OFF + 100_000_000, 3), send(11, m + OFF + 450_000_000, 3)]
+    assert run_shared(fl, ev)[0]["/req"]["pid"] == 11
+
+
+def test_a_later_write_on_a_reused_fd_number_is_not_the_request():
+    m = 100 * S
+    fl = shared("a", m, {10: [3], 11: [3]})
+    ev = [exe(11), send(11, m + OFF + 450_000_000, 3), send(10, m + OFF + 505_000_000, 3, "write")]
+    assert run_shared(fl, ev)[0]["/req"]["pid"] == 11
+
+
+def test_a_send_on_a_different_descriptor_is_ignored():
+    m = 100 * S
+    fl = shared("a", m, {10: [3], 11: [3]})
+    r = run_shared(fl, [exe(11), send(11, m + OFF + 450_000_000, 9)])[0]["/req"]
+    assert r["pid"] == 10 and r["method"] == "shared-socket-sender-unknown" and r["opener"] == 10
+
+
+def test_a_shared_socket_with_no_send_events_is_flagged_not_silently_attributed():
+    m = 100 * S
+    r = run_shared(shared("a", m, {10: [3], 11: [3]}), [exe(11)])[0]["/req"]
+    assert r["method"] == "shared-socket-sender-unknown" and r["candidates"] == [10, 11] and r["scope"] == "in-tree"
+
+
+def test_an_unshared_socket_is_untouched_by_sender_logic():
+    m = 100 * S
+    r = run_shared(shared("a", m, {10: [3]}), [send(10, m + OFF + 450_000_000, 3)])[0]["/req"]
+    assert r["method"].startswith("socket-holder") and "opener" not in r and r["pid"] == 10

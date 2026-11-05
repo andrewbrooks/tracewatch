@@ -12,6 +12,11 @@ from pathlib import Path
 IMAGE = "aquasec/tracee:latest"
 CAP_RESERVE = 4096  # headroom below the cap for the marker line
 EVENTS = "sched_process_exec,sched_process_exit,net_tcp_connect,security_socket_connect"
+# Who SENDS on a socket (as opposed to who opened it): needed when several processes hold one connection.
+# sendto/sendmsg/sendmmsg are socket-only; write/writev are every file and pipe too, so stdio is excluded in the kernel
+# and the collector drops the rest unless the descriptor is a socket (see keep_line).
+SEND_EVENTS = "sendto,sendmsg,sendmmsg"
+WRITE_EVENTS = ("write.data.fd!=0,1,2", "writev.data.fd!=0,1,2")
 
 # File activity is high-volume (every process opens dozens of libraries), so only these paths are watched,
 # filtered inside Tracee. Tracee's string filter supports only a PREFIX (`/tmp/*`) or a SUFFIX (`*/id_rsa`)
@@ -123,10 +128,28 @@ def remove(name: str) -> None:
 
 def scoped_args(host_pid: int, file_patterns: list[str] | None = None) -> list[str]:
     pats = file_watch_patterns() if file_patterns is None else file_patterns
-    args = ["--events", EVENTS]
+    args = ["--events", EVENTS, "--events", SEND_EVENTS]
+    for w in WRITE_EVENTS:
+        args += ["--events", w]
     if pats:
         args += ["--events", f"security_file_open.data.pathname={','.join(pats)}"]
     return args + ["--scope", f"tree={host_pid}", "--output", "json"]
+
+
+_WRITE_MARK = (b'"eventName":"write"', b'"eventName":"writev"')
+
+
+def keep_line(line: bytes) -> bool:
+    """Collector pre-filter. A write()/writev() event is kept only if the descriptor is a socket right now; if the
+    process is already gone we cannot tell, so the event is kept rather than guessed away. Everything else is kept."""
+    if not any(m in line for m in _WRITE_MARK):
+        return True
+    try:
+        e = json.loads(line)
+        fd = next(a["value"] for a in e["args"] if a["name"] == "fd")
+        return os.readlink(f"/proc/{e['processId']}/fd/{fd}").startswith("socket:")
+    except (OSError, ValueError, KeyError, StopIteration, TypeError):
+        return True
 
 
 class Collector(threading.Thread):
@@ -148,12 +171,15 @@ class Collector(threading.Thread):
         err: Path,
         transform=None,
         max_bytes: int | None = None,
+        keep=None,
     ):
         super().__init__(daemon=True, name="tracee-collector")
         self.run_id, self.container, self.tracee_args = run_id, container, tracee_args
         self.out, self.err = out, err
         self.transform = transform  # bytes line -> bytes line (redaction); applied BEFORE the write
         self.redaction_failures = 0
+        self.keep = keep  # bytes line -> bool; lines it rejects are counted in `filtered`, never written
+        self.filtered = 0
         self.max_bytes = max_bytes  # past this, lines are dropped (and counted) but the pipe keeps draining
         self.capped = False
         self.dropped = 0
@@ -191,6 +217,9 @@ class Collector(threading.Thread):
             last_sync = time.monotonic()
             for line in iter(self.proc.stdout.readline, b""):
                 data = line if line.endswith(b"\n") else line + b"\n"
+                if self.keep and not self.keep(data):
+                    self.filtered += 1
+                    continue
                 if self.transform:
                     try:
                         data = self.transform(data)

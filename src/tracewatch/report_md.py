@@ -197,6 +197,19 @@ def render(m: dict) -> str:
         )
     )
 
+    shared = [h for h in m["http"] if (h["attribution"] or {}).get("opener") is not None]
+    if shared:
+        o.append("**Shared connections** (several processes held the socket):\n")
+        for h in shared:
+            a, url = h["attribution"], code(f"{h['scheme']}://{h['host']}{h['path']}", 90)
+            if a["method"] == "shared-socket-sender-unknown":
+                o.append(f"- {url}: sender unknown; shown is the opener, candidates pids {txt(a['candidates'])}")
+            else:
+                o.append(
+                    f"- {url}: sent by {txt(pname(h['proc']))}; connection opened by {txt(pname(a['opener_proc']))}"
+                )
+        o.append("")
+
     if m["websockets"]:
         o.append("## WebSockets\n")
         o.append(

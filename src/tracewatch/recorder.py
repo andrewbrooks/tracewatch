@@ -298,6 +298,7 @@ def record(o: Options) -> int:
         run.p(TRACEE),
         run.p(TRACEE_ERR),
         transform=redactor.tracee_line,
+        keep=tracee.keep_line,
         max_bytes=o.max_tracee_bytes,
     )
     collector.start()
@@ -387,7 +388,12 @@ def record(o: Options) -> int:
     ev.emit("ca_private_material_removed", files=removed)
     m["caps"] = {
         "proxy": summaries.get("cap_summary"),  # None if the proxy was killed before its shutdown hook ran
-        "tracee": {"capped": collector.capped, "lines_dropped": collector.dropped, "bytes_written": collector.written},
+        "tracee": {
+            "capped": collector.capped,
+            "lines_dropped": collector.dropped,
+            "bytes_written": collector.written,
+            "writes_not_to_sockets_skipped": collector.filtered,
+        },
     }
     m.update(
         status="interrupted" if flag["stop"] else "finished",

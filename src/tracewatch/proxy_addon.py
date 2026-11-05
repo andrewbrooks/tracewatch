@@ -224,16 +224,22 @@ def _inode(sport: int, pport: int):
 
 
 def _holders(inode: str):
-    want, pids, n = f"socket:[{inode}]", set(), 0
+    """-> (sorted holder pids, processes scanned, {pid: [fd numbers]}): the fds let the join match a process's
+    send()/write() on descriptor N to this connection."""
+    want, fds, n = f"socket:[{inode}]", {}, 0
     for d in glob.glob("/proc/[0-9]*/fd"):
         n += 1
         try:
             for fd in os.listdir(d):
                 if os.readlink(f"{d}/{fd}") == want:
-                    pids.add(int(d.split("/")[2]))
+                    fds.setdefault(int(d.split("/")[2]), []).append(int(fd))
         except OSError:
             continue
-    return sorted(pids), n
+    return sorted(fds), n, fds
+
+
+_conn_state: dict[str, dict] = {}  # conn_id -> {"inode", "pids", "scans"}: a connection can be shared after accept
+MAX_RESCANS = 8  # per connection: each scan blocks the proxy loop for as long as the accept-time one does
 
 
 def client_connected(client) -> None:
@@ -245,7 +251,11 @@ def client_connected(client) -> None:
         if inode:
             break
         time.sleep(0.002)
-    holders, nproc = _holders(inode) if inode else ([], 0)
+    holders, nproc, hfds = _holders(inode) if inode else ([], 0, {})
+    if inode:
+        _conn_state[client.id] = {"inode": inode, "pids": set(holders), "scans": 0}
+        if len(_conn_state) > 4096:  # bounded: forget the oldest connections
+            _conn_state.pop(next(iter(_conn_state)), None)
     lag = time.time_ns() - int(client.timestamp_start * 1e9)
     _write(
         {
@@ -255,6 +265,7 @@ def client_connected(client) -> None:
             "proxy_port": pport,
             "inode": inode,
             "holder_pids": holders,
+            "holder_fds": {str(p): f for p, f in hfds.items()},
             "accept_mono_ns": time.monotonic_ns() - lag,
             "lookup_ms": round((time.perf_counter() - t0) * 1000, 2),
             "procs_scanned": nproc,
@@ -280,11 +291,24 @@ def http_connect_error(flow: http.HTTPFlow) -> None:
     _emit("flow_result", lambda: {"kind": "flow_result", "flow_id": flow.id, "error": _red.text(str(flow.error))})
 
 
+def _rescan(conn_id: str) -> dict:
+    """Holders of this connection's socket NOW, only if they differ from the accept-time set (a child inherited it)."""
+    st = _conn_state.get(conn_id)
+    if not st or st["scans"] >= MAX_RESCANS:
+        return {}
+    st["scans"] += 1
+    pids, _, fds = _holders(st["inode"])
+    if set(pids) == st["pids"]:
+        return {}
+    return {"holders_now": {str(p): f for p, f in fds.items()}}
+
+
 def request(flow: http.HTTPFlow) -> None:
     _emit(
         "flow",
         lambda: {
             "kind": "flow",
+            **_rescan(flow.client_conn.id),
             "flow_id": flow.id,
             "conn_id": flow.client_conn.id,
             "client_port": flow.client_conn.peername[1],
