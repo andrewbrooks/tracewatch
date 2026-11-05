@@ -3,6 +3,8 @@ name = "tracewatch"
 version = "0.1.0"
 description = "Flight recorder for a launched process: Tracee (kernel) + mitmproxy (HTTP), reconstructed post facto"
 requires-python = ">=3.12"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 dependencies = ["mitmproxy>=12.3"]
 
 [project.scripts]

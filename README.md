@@ -110,4 +110,4 @@ report's behavior, accessibility basics, and the security properties of the embe
 
 ## Status
 
-An experiment. The interfaces and the data format may change without notice. No license has been chosen yet.
+An experiment. The interfaces and the data format may change without notice. Licensed under the [Apache License, Version 2.0](LICENSE).
