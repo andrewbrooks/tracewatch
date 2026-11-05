@@ -103,7 +103,10 @@ let themePref = 'auto';
 try { themePref = localStorage.getItem(THEME_KEY) || 'auto'; } catch (e) { /* file:// storage can be blocked */ }
 if (!['auto', 'light', 'dark'].includes(themePref)) themePref = 'auto';
 const lightMQ = matchMedia('(prefers-color-scheme: light)');
-function applyTheme() { document.documentElement.dataset.theme = themePref === 'auto' ? (lightMQ.matches ? 'light' : 'dark') : themePref; readColors(); }
+// printing always uses the light theme (paper is white) and renders every table row, whatever the screen theme is
+const printMQ = matchMedia('print');
+let PRINTING = false;
+function applyTheme() { document.documentElement.dataset.theme = PRINTING ? 'light' : themePref === 'auto' ? (lightMQ.matches ? 'light' : 'dark') : themePref; readColors(); }
 applyTheme();
 
 function shapePath(shape, x, y, r) {

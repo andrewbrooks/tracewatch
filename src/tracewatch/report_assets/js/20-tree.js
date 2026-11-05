@@ -174,7 +174,13 @@ function treeView() {
     const n = pos.get(id); if (!n) return;
     const W = canvas.clientWidth, H = canvas.clientHeight; tx = W / 2 - (n.x + NW / 2) * k; ty = H / 2 - (n.y + NH / 2) * k; apply();
   }
-  root.onShow = () => { if (first || !pos.size) render(true); else render(); if (S.sel && S.sel.type === 'proc') reveal(S.sel.id); };
+  let wasPrinting = false;
+  root.onShow = () => {
+    const modeChanged = wasPrinting !== PRINTING; wasPrinting = PRINTING;   // entering or leaving print resizes the canvas: refit
+    if (first || !pos.size || modeChanged) render(true); else render();
+    if (PRINTING) fit(true);   // on paper the whole tree, not whatever the screen was showing
+    if (S.sel && S.sel.type === 'proc') reveal(S.sel.id);
+  };
   onState(() => { if (root.classList.contains('on')) { render(); } });
   root.reveal = reveal;
   return root;

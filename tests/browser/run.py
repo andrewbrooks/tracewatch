@@ -1,9 +1,10 @@
-"""Browser tests for the interactive report (headless Chromium via Playwright).
+"""Browser tests for the interactive report (headless Chromium via Playwright; TW_BROWSER=firefox for Firefox).
 
 usage: run.py [DEMO_RUN_DIR]      (default out/demo/runs/demo; produced by tests/fixtures/demo.sh)
 If Chromium cannot start because system libraries are missing, set LD_LIBRARY_PATH to a directory holding them."""
 
 import json
+import os
 import sys
 import tempfile
 import time
@@ -596,6 +597,58 @@ def run_keyboard(b, path):
     s.page.close()
 
 
+def run_print(b, path):
+    """Printing: always the light theme, every view and every table row, no screen-only controls, nothing clipped."""
+    s = Session(b, path, width=704, height=1000)  # an A4 page minus its margins, in CSS pixels
+    p = s.page
+    s.tab("commands")
+    on_screen = int(
+        p.locator(".view.on .tbl-head")
+        .evaluate("e => e.parentElement.parentElement.querySelector('.muted.num').textContent")
+        .split()[0]
+        .replace(",", "")
+    )
+    p.emulate_media(media="print")
+    p.wait_for_timeout(1200)
+    check(
+        "print uses the light theme whatever the screen theme was",
+        p.evaluate("document.documentElement.dataset.theme") == "light",
+    )
+    check(
+        "print hides the navigation, search, drawer and screen-only buttons",
+        p.evaluate(
+            "['#rail', '#search', '#drawer', '.view .btn'].every(q => [...document.querySelectorAll(q)].every(e => getComputedStyle(e).display === 'none'))"
+        ),
+    )
+    check(
+        "print shows every view, not just the active one (and skips the timeline)",
+        p.evaluate("[...document.querySelectorAll('.view')].filter(v => getComputedStyle(v).display !== 'none').length")
+        == len(ALL_TABS) - 1,
+    )
+    check(
+        "print renders EVERY table row, not the on-screen window",
+        p.locator("#view-commands .tbl-row").count() == on_screen,
+    )
+    check(
+        "a view that was never opened is filled in for print",
+        p.locator("#view-http .tbl-row").count() > 0 and p.locator("#view-dns .tbl-row").count() > 0,
+    )
+    check("nothing overflows the page width", p.evaluate("document.documentElement.scrollWidth - innerWidth") <= 1)
+    check(
+        "print colours are dark-on-light (text is not the dark theme's light grey)",
+        p.evaluate("getComputedStyle(document.querySelector('#view-commands .tbl-row')).color").startswith("rgb(1"),
+    )
+    p.emulate_media(media="screen")
+    p.wait_for_timeout(700)
+    check(
+        "leaving print restores the screen layout",
+        p.evaluate("getComputedStyle(document.querySelector('#rail')).display") != "none"
+        and p.locator(".view.on").count() == 1,
+    )
+    check("no console errors through a print round trip", not s.errors, "; ".join(s.errors[:2]))
+    s.page.close()
+
+
 def _chain(model, pid):
     by = {p["id"]: p for p in model["processes"]}
     out, cur = [], by.get(pid)
@@ -681,7 +734,10 @@ def run_big(b):
 def main(demo_dir):
     OUT.mkdir(parents=True, exist_ok=True)
     with sync_playwright() as pw:
-        b = pw.chromium.launch()
+        b = getattr(
+            pw, os.environ.get("TW_BROWSER", "chromium")
+        ).launch()  # TW_BROWSER=firefox to run the suite on Firefox
+        print("INFO browser:", b.browser_type.name, b.version)
         if Path(demo_dir, "manifest.json").exists():
             run_demo(b, demo_dir)
         else:
@@ -691,6 +747,7 @@ def main(demo_dir):
         if Path(demo_dir, "manifest.json").exists():
             run_keyboard(b, OUT / "demo.html")
             run_responsive(b, OUT / "demo.html")
+            run_print(b, OUT / "demo.html")
         run_edges(b)
         run_hostile(b)
         run_big(b)

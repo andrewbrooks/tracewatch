@@ -32,6 +32,8 @@ function paintThemeBtn() {
   themeBtn.title = themePref === 'auto' ? 'Theme: follows your system. Click for light.' : `Theme: ${themePref}. Click for ${next}.`;
 }
 lightMQ.addEventListener('change', () => { if (themePref === 'auto') { applyTheme(); setState({}); } });
+let VIEWS = {};   // set by init(): print shows EVERY view, and a view that was never opened has not been filled yet
+printMQ.addEventListener('change', ev => { PRINTING = ev.matches; applyTheme(); setState({}); for (const v of Object.values(VIEWS)) if (v.onShow) requestAnimationFrame(() => v.onShow()); });
 
 function buildShell() {
   const app = h('div', { id: 'app' });
@@ -63,6 +65,7 @@ function buildShell() {
 }
 function init() {
   const { views, search } = buildShell();
+  VIEWS = views;
   const fromHash = () => {
     const [tab, a, b] = location.hash.replace(/^#\/?/, '').split('/'); const patch = {};
     if (TABS.some(t => t[0] === tab)) patch.tab = tab;

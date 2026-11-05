@@ -51,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     df = sub.add_parser("diff", help="what did the process do differently? exit 0 = same behaviour, 1 = changed")
     df.add_argument("before")
     df.add_argument("after")
-    df.add_argument("--format", choices=["md", "json"], default="md")
+    df.add_argument("--format", choices=["md", "json", "html"], default="md")
     df.add_argument("-o", "--output", help="output file (default: stdout)")
     s = sub.add_parser("sweep", help="finalize runs whose recorder died, remove leaked containers/proxies")
     s.add_argument("--out", default=DEFAULT_RUNS)
@@ -127,7 +127,14 @@ def _diff(a) -> int:
             return 2
         models.append(build(Path(d)))
     res = compare(*models)
-    body = json.dumps(res, indent=1) if a.format == "json" else render_md(res)
+    if a.format == "json":
+        body = json.dumps(res, indent=1)
+    elif a.format == "html":
+        from .diff_html import render as render_html
+
+        body = render_html(res)
+    else:
+        body = render_md(res)
     if a.output:
         Path(a.output).write_text(body)
         Path(a.output).chmod(0o600)

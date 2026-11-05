@@ -185,7 +185,6 @@ pre.code { margin: 0; background: var(--page); border: 1px solid var(--line); bo
 .copy { position: absolute; top: 6px; right: 6px; padding: 2px 7px; font-size: 10.5px; border-radius: 5px; border: 1px solid var(--line-2); background: var(--raised); color: var(--text-2); }
 .timing { display: flex; height: 8px; border-radius: 4px; overflow: hidden; gap: 2px; background: rgba(var(--ink-rgb),.04); } .timing i { display: block; height: 100%; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
-@media print { body { overflow: visible; } #rail, #top input, #drawer { display: none; } .view { display: block !important; } }
 
 .view.col.on { display: flex; flex-direction: column; height: 100%; } .view.col .tbl-wrap { flex: 1; min-height: 200px; }
 table.plain { width: 100%; border-collapse: collapse; font-size: 12px; } table.plain th { text-align: left; font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase; color: var(--text-3); padding: 6px 8px; border-bottom: 1px solid var(--line-2); position: sticky; top: 0; background: var(--surface); }
@@ -240,3 +239,25 @@ details > summary { list-style: none; } details > summary::-webkit-details-marke
 @media (max-width: 340px) { .kpis { grid-template-columns: 1fr; } }
 @media (max-width: 820px) { .toolbar { flex-wrap: nowrap; overflow-x: auto; } .toolbar .btn { flex: none; white-space: nowrap; } .toolbar .muted { white-space: nowrap; } }
 .btn:disabled { opacity: .45; cursor: not-allowed; } .btn:disabled:hover { color: var(--text-2); border-color: var(--line-2); }
+
+/* ---------- print: light theme (applied by the script), no chrome, every table row, no clipped panels ---------- */
+@media print {
+  @page { margin: 12mm; }
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  html, body { height: auto; overflow: visible; }
+  body { background: none; }
+  #app { display: block; height: auto; }
+  #rail, #search, .iconbtn, .skip, .toast, .modal-bg, #drawer, .toolbar, .zoombox, .tools, .view .btn, .verdict .chev { display: none !important; }
+  #top { position: static; border-bottom: 1px solid var(--line-2); padding: 0 0 10px; height: auto; flex-wrap: wrap; }
+  #top::before { display: none; }
+  #main { overflow: visible; height: auto; }
+  .view { animation: none; padding: 12px 0; min-height: 0; }
+  .view, .view.fill, .view.col { display: block !important; height: auto; }
+  .view + .view { break-before: page; }   /* every view starts on its own page */
+  .tbl-wrap { zoom: .66; }   /* the columns have fixed widths made for a screen: shrink the whole table to the page, not just clip it */
+  .tbl-wrap { overflow: visible; max-height: none !important; border-color: var(--line-2); }
+  .tbl-row, .card, .fcard, .kpi, .banner { break-inside: avoid; }
+  .canvas { overflow: visible; height: 860px; min-height: 0; background-image: none; }
+  #view-timeline { display: none !important; }   /* a pannable, virtualised swim-lane chart has no honest paper form: Commands and Events hold the same data */
+  .cov, .chart { break-inside: avoid; }
+}

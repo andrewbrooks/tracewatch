@@ -1,4 +1,5 @@
 /* ===== virtualised, sortable table. rows() is re-evaluated on refresh() so filters always apply. ===== */
+const PRINT_ROWS = 4000;
 function vtable(cfg) {
   const ROWH = matchMedia('(pointer: coarse)').matches ? Math.max(cfg.rowHeight || 32, 40) : (cfg.rowHeight || 32);
   let sortKey = cfg.defaultSort || null, sortDir = cfg.defaultDir || 1, data = [], raf = 0;
@@ -28,8 +29,12 @@ function vtable(cfg) {
   }
   function paint() {
     const keep = body.contains(document.activeElement) && document.activeElement.dataset ? document.activeElement.dataset.i : null;
-    const top = wrap.scrollTop, vh = wrap.clientHeight || 400, i0 = Math.max(0, Math.floor(top / ROWH) - 6), i1 = Math.min(data.length, Math.ceil((top + vh) / ROWH) + 6);
+    const top = wrap.scrollTop, vh = wrap.clientHeight || 400;
+    // on paper every row is rendered (up to a cap): a virtualised window would print only what happens to be on screen
+    const i0 = PRINTING ? 0 : Math.max(0, Math.floor(top / ROWH) - 6), i1 = PRINTING ? Math.min(data.length, PRINT_ROWS) : Math.min(data.length, Math.ceil((top + vh) / ROWH) + 6);
     clear(body);
+    body.style.height = (PRINTING ? Math.min(data.length, PRINT_ROWS) : data.length) * ROWH + (PRINTING && data.length > PRINT_ROWS ? ROWH : 0) + 'px';
+    if (PRINTING && data.length > PRINT_ROWS) body.appendChild(h('div', { class: 'tbl-row muted', style: { top: PRINT_ROWS * ROWH + 'px', height: ROWH + 'px', display: 'block', padding: '6px 12px' } }, 'Printed: the first ' + fmtN(PRINT_ROWS) + ' of ' + fmtN(data.length) + ' rows. Use the Markdown report for everything.'));
     for (let i = i0; i < i1; i++) {
       const r = data[i], sel = cfg.isSelected && cfg.isSelected(r);
       const row = h('div', { class: 'tbl-row' + (sel ? ' sel' : ''), role: 'row', tabindex: '0', style: { top: i * ROWH + 'px', gridTemplateColumns: grid, minWidth: cfg.minWidth || '0', height: ROWH + 'px' }, 'aria-selected': String(!!sel),

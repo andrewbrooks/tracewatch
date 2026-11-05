@@ -14,6 +14,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,6 +32,7 @@ WRAP = (
 )
 CA_ENV = ("CURL_CA_BUNDLE", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "GIT_SSL_CAINFO")
 HEARTBEAT_S = 2.0
+DRAIN_GRACE_S = 1.0  # after the root's exit event is read, keep collecting this long
 EX_RECORDER_FAILED = 70
 
 
@@ -158,8 +160,11 @@ def record(o: Options) -> int:
         },
         "lost_components": lost,
         "degraded": False,
-        "versions": {"mitmproxy": mv.VERSION, "tracee": tracee.image_info()},
+        "versions": {"mitmproxy": mv.VERSION, "tracee": {"image": tracee.IMAGE, "pending": True}},
     }
+    tracee_info: dict = {}
+    info_thread = threading.Thread(target=lambda: tracee_info.update(tracee.image_info()), daemon=True)
+    info_thread.start()  # a docker round-trip that nothing waits for until the manifest is rewritten after arming
     run.write_manifest(m)
     ev.emit("run_started")
     flag = {"stop": False, "sig": None}
@@ -288,6 +293,8 @@ def record(o: Options) -> int:
     if hp is None:
         return abort_start("could not learn the root's host pid (is Docker up and Tracee runnable?)")
     m["root_host_pid"] = hp
+    info_thread.join(timeout=30)
+    m["versions"]["tracee"] = dict(tracee_info) or {"image": tracee.IMAGE, "error": "version lookup failed"}
     run.p("flags/p1").touch()
     watch = tracee.file_watch_patterns()
     m["file_watch"] = watch  # the ONLY paths whose opens are recorded: the report must say so
@@ -301,15 +308,16 @@ def record(o: Options) -> int:
         keep=tracee.keep_line,
         max_bytes=o.max_tracee_bytes,
     )
+    collector.watch_exit_pid = root.pid
     collector.start()
     ev.emit("component_started", component="tracee", container=cname, host_pid=hp)
     for _ in range(180):
         if collector.lines and b'"eventName"' in run.p(TRACEE).read_bytes():
             break
-        time.sleep(0.5)
+        time.sleep(0.1)
     else:
         return abort_start("tracee produced no events")
-    time.sleep(1)
+    time.sleep(0.5)  # the probe has been seen: every hook is attached; a short margin for the rest to settle
     run.p("flags/p2").touch()  # release the root: it now execs the real command
     ev.emit("recording_armed")
     run.write_manifest(m)
@@ -371,7 +379,14 @@ def record(o: Options) -> int:
     # --- teardown
     ev.emit("teardown_started")
     if "tracee" not in lost:
-        time.sleep(o.drain_s)  # let Tracee flush its last events
+        # let Tracee flush its last events: wait for the root's own exit event, then a short grace for the stragglers
+        # that die with it; o.drain_s is only the ceiling if that event never arrives
+        stop_at = time.monotonic() + o.drain_s
+        while time.monotonic() < stop_at:
+            seen = collector.exit_seen_at
+            if seen is not None and time.monotonic() - seen >= DRAIN_GRACE_S:
+                break
+            time.sleep(0.05)
         tracee.stop_and_remove(cname)
     collector.join(timeout=15)
     collector.stop()

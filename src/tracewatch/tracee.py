@@ -97,7 +97,7 @@ def first_event(name: str, timeout: float = 90) -> dict | None:
         for line in out.splitlines():
             if '"eventName"' in line:
                 return json.loads(line)
-        time.sleep(0.5)
+        time.sleep(0.1)
     return None
 
 
@@ -180,6 +180,10 @@ class Collector(threading.Thread):
         self.redaction_failures = 0
         self.keep = keep  # bytes line -> bool; lines it rejects are counted in `filtered`, never written
         self.filtered = 0
+        self.watch_exit_pid: int | None = (
+            None  # set to the root's pid: when its exit event is read, `exit_seen_at` is set
+        )
+        self.exit_seen_at: float | None = None
         self.max_bytes = max_bytes  # past this, lines are dropped (and counted) but the pipe keeps draining
         self.capped = False
         self.dropped = 0
@@ -217,6 +221,8 @@ class Collector(threading.Thread):
             last_sync = time.monotonic()
             for line in iter(self.proc.stdout.readline, b""):
                 data = line if line.endswith(b"\n") else line + b"\n"
+                if self.watch_exit_pid is not None and self.exit_seen_at is None and self._is_exit(data):
+                    self.exit_seen_at = time.monotonic()
                 if self.keep and not self.keep(data):
                     self.filtered += 1
                     continue
@@ -246,6 +252,9 @@ class Collector(threading.Thread):
             os.close(fd)
         except Exception as e:  # noqa: BLE001 - surfaced via .error; the recorder records the loss
             self.error = repr(e)
+
+    def _is_exit(self, line: bytes) -> bool:
+        return b'"eventName":"sched_process_exit"' in line and b'"processId":%d,' % self.watch_exit_pid in line
 
     def stop(self) -> None:
         if self.proc and self.proc.poll() is None:
