@@ -288,7 +288,7 @@ def record(o: Options) -> int:
     run.write_manifest(m)
 
     # --- tracee
-    say("starting kernel tracing (takes ~15 s)...")
+    say("starting kernel tracing (takes about 5-10 s)...")
     hp = tracee.bootstrap_host_pid(run.run_id)
     if hp is None:
         return abort_start("could not learn the root's host pid (is Docker up and Tracee runnable?)")

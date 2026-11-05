@@ -59,6 +59,19 @@ def test_hard_cap_stops_writing_leaves_marker_and_counts_drops(addon, tmp_path):
     assert marker["written"] <= 30000 - 4000  # the marker itself records that data stopped below the cap
 
 
+def test_after_the_hard_cap_even_a_tiny_record_is_dropped(addon, tmp_path):
+    """A small record that would still fit under the limit must not slip in after the marker (found by caps.sh)."""
+    for i in range(400):
+        addon._write({"kind": "flow", "flow_id": str(i), "pad": "x" * 100})
+    assert addon._hit["hard"]
+    addon._written = 30000 - 4000 - 300  # leave 300 bytes of room below the limit: a tiny record would fit
+    before = (tmp_path / "flows.jsonl").stat().st_size
+    dropped = addon._dropped["connect"]
+    addon._write({"kind": "connect", "conn_id": "c"})  # ~40 bytes: fits below the limit
+    assert (tmp_path / "flows.jsonl").stat().st_size == before
+    assert addon._dropped["connect"] == dropped + 1
+
+
 def test_essential_summaries_still_fit_in_the_reserve_after_the_hard_cap(addon, tmp_path):
     for i in range(400):
         addon._write({"kind": "flow", "flow_id": str(i), "pad": "x" * 100})

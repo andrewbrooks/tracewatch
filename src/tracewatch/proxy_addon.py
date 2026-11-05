@@ -84,6 +84,11 @@ def _write(rec: dict, essential: bool = False) -> None:
     global _written
     if len(json.dumps(rec, separators=(",", ":"))) > RECORD_CAP:
         rec = _shrink(rec)
+    if _hit["hard"] and not essential:
+        # once the hard cap has been hit nothing else is written, however small: a tiny record that happens to fit
+        # below the limit would otherwise slip in after the marker and the file would stop being "monotonic"
+        _dropped[rec.get("kind", "?")] += 1
+        return
     est = len(json.dumps(rec, separators=(",", ":"))) + 64
     limit = HARD_CAP if essential else (HARD_CAP - RESERVE if HARD_CAP else None)
     if limit is not None and _written + est > limit:
@@ -112,7 +117,7 @@ def _emit(kind: str, build) -> None:
     """Build the (redacted) record, then write it. If redaction raises, the content is dropped, not written."""
     try:
         rec = build()
-    except Exception as e:  # noqa: BLE001 - fail closed on anything
+    except Exception as e:
         rec = {"kind": "redaction_failed", "while_recording": kind, "error": type(e).__name__}
     _write(rec)
 
@@ -168,7 +173,7 @@ def _decode(raw: bytes, encoding: str) -> bytes:
             return out
     except ValueError:
         raise
-    except Exception as e:  # noqa: BLE001 - zlib.error, brotli.error, ZstdError, ImportError ...: all mean "cannot decode"
+    except Exception as e:
         raise ValueError(f"undecodable ({type(e).__name__})") from e
     raise ValueError(f"content-encoding {enc!r} not decodable for capture")
 

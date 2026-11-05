@@ -3,9 +3,26 @@ name = "tracewatch"
 version = "0.1.0"
 description = "Flight recorder for a launched process: Tracee (kernel) + mitmproxy (HTTP), reconstructed post facto"
 requires-python = ">=3.12"
+readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
+keywords = ["ebpf", "tracee", "mitmproxy", "observability", "process-tracing", "security", "reports"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Information Technology",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Security",
+    "Topic :: System :: Monitoring",
+]
 dependencies = ["mitmproxy>=12.3"]
+
+[project.urls]
+Homepage = "https://andrewbrooks.github.io/tracewatch/"
+Source = "https://github.com/andrewbrooks/tracewatch"
+Documentation = "https://github.com/andrewbrooks/tracewatch/tree/main/docs"
 
 [project.scripts]
 tracewatch = "tracewatch.cli:main"
@@ -17,6 +34,11 @@ dev = [
     "ruff>=0.6",
     "websockets>=17.4",
 ]
+
+[tool.uv]
+# mitmproxy 12.3.1 caps tornado below the release that fixes three CVEs. tracewatch only uses mitmdump (tornado serves
+# mitmweb's UI), so the override is a belt-and-braces measure for the lockfile; revisit when mitmproxy lifts its cap.
+override-dependencies = ["tornado>=6.6"]
 
 [build-system]
 requires = ["hatchling"]

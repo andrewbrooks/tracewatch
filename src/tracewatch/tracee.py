@@ -9,7 +9,7 @@ import threading
 import time
 from pathlib import Path
 
-IMAGE = "aquasec/tracee:latest"
+IMAGE = "aquasec/tracee:0.24.1"  # pinned: the version this was tested with (same digest as :latest when pinned)
 CAP_RESERVE = 4096  # headroom below the cap for the marker line
 EVENTS = "sched_process_exec,sched_process_exit,net_tcp_connect,security_socket_connect"
 # Who SENDS on a socket (as opposed to who opened it): needed when several processes hold one connection.
@@ -229,7 +229,7 @@ class Collector(threading.Thread):
                 if self.transform:
                     try:
                         data = self.transform(data)
-                    except Exception:  # noqa: BLE001 - fail closed: never write a line we could not redact
+                    except Exception:
                         self.redaction_failures += 1
                         data = b'{"kind":"redaction_failed","where":"tracee"}\n'
                 if self.max_bytes and self.written + len(data) > self.max_bytes - CAP_RESERVE:
@@ -250,7 +250,7 @@ class Collector(threading.Thread):
                     last_sync = time.monotonic()
             os.fsync(fd)
             os.close(fd)
-        except Exception as e:  # noqa: BLE001 - surfaced via .error; the recorder records the loss
+        except Exception as e:
             self.error = repr(e)
 
     def _is_exit(self, line: bytes) -> bool:
