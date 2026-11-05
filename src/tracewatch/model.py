@@ -11,6 +11,7 @@ guess."""
 
 from __future__ import annotations
 
+import json
 import os
 import shlex
 from collections import Counter, defaultdict
@@ -120,68 +121,58 @@ def _is_loopback(s: str) -> bool:
         return False
 
 
-def build(run_dir: Path | str) -> dict:
-    run_dir = Path(run_dir)
-    import json
+class _Clock:
+    """Maps proxy monotonic stamps onto the Tracee clock, relative to T0."""
 
-    manifest = json.loads((run_dir / "manifest.json").read_text())
-    integ = assess(run_dir)
-    fl = load(run_dir / "flows.jsonl") if (run_dir / "flows.jsonl").exists() else []
-    raw = load(run_dir / "tracee.jsonl") if (run_dir / "tracee.jsonl").exists() else []
-    rec_events = load(run_dir / "events.jsonl") if (run_dir / "events.jsonl").exists() else []
-    tr_all = [e for e in raw if "eventName" in e]
-    tr = [e for e in tr_all if e.get("processName") != "twprobe"]
-    notes: list[str] = []
-    root_pid, proxy_port = manifest.get("root_pid"), manifest.get("proxy_port")
+    def __init__(self, offset: int, source: str, t0: int):
+        self.offset, self.source, self.t0 = offset, source, t0
 
-    # ---- T0 = the root process's exec of the real command (the wrapper's probe loop before it is dropped)
-    root_execs = [e["timestamp"] for e in tr if e["processId"] == root_pid and e["eventName"] == "sched_process_exec"]
-    if root_execs:
-        t0 = min(root_execs)
-    elif tr:
-        t0 = min(e["timestamp"] for e in tr)
-        notes.append("The target's exec was not recorded; time zero is the first recorded event.")
-    else:
-        t0 = 0
-        notes.append("Tracee recorded no events for the target.")
-    # Drop what the recorder's wrapper spawned BEFORE the root's exec (its probe loop). A time window is not enough:
-    # such a child can exit a fraction of a millisecond after T0. Anything born before the root's exec, other than
-    # the root itself, is not part of the target.
-    born: dict[int, int] = {}
-    for e in tr:
-        born[e["processEntityId"]] = min(
-            born.get(e["processEntityId"], 1 << 62), e.get("threadStartTime") or e["timestamp"]
-        )
-    root_eids = {e["processEntityId"] for e in tr if e["processId"] == root_pid}
-    pre_exec = {eid for eid, b0 in born.items() if b0 < t0 - 1_000_000 and eid not in root_eids}
-    tr = [e for e in tr if e["processEntityId"] not in pre_exec and e["timestamp"] >= t0 - 1_000_000]
+    def rel(self, rec: dict, key: str = "t_mono_ns") -> int:
+        return rec[key] + self.offset - self.t0
 
-    # ---- clock: proxy monotonic stamps -> Tracee clock
-    info: dict = {}
-    capped = any(e.get("kind") == "cap_reached" for e in raw)
-    join_records(fl, tr, proxy_port, info, tracee_capped=capped)
-    offset = info.get("offset_ns")
-    clock_source = "anchors"
-    if offset is None:
-        started = manifest.get("started", {})
-        offset = (started.get("t_wall_ns", 0) - started.get("t_mono_ns", 0)) if started else 0
-        clock_source = "manifest-pair"
-        notes.append(
-            "No unambiguous (connection, connect) pair was available to align the proxy and kernel clocks; the "
-            "alignment uses the start-of-run clock pair and may be off by a second or two where the wall clock stepped."
-        )
 
-    def rel_proxy(rec: dict, key: str = "t_mono_ns") -> int:
-        return rec[key] + offset - t0
+class _Timeline:
+    """The event log under construction: kernel and proxy events are added in any order, then sorted and numbered."""
 
-    # ---- processes
-    procs = _build_processes(tr, root_pid, t0)
-    by_pid: dict[int, list[dict]] = defaultdict(list)
-    for p in procs:
-        by_pid[p["pid"]].append(p)
+    def __init__(self) -> None:
+        self.events: list[dict] = []
+        self._last_resolver: dict[tuple, dict] = {}
 
-    def proc_at(pid: int | None, t_rel: int) -> dict | None:
-        cands = by_pid.get(pid, []) if pid is not None else []
+    def add(self, t: int, kind: str, proc: dict | None, title: str, sub: str | None = None, **detail) -> dict:
+        e = {"t": t, "kind": kind, "sub": sub, "proc": proc["id"] if proc else None, "title": title, "detail": detail}
+        self.events.append(e)
+        return e
+
+    def add_resolver(self, t: int, proc: dict | None, resolver: str, title: str, **detail) -> None:
+        """glibc makes several socket calls per lookup; contacts with the same resolver by the same process within
+        50 ms are ONE event with a count, so the log shows the lookup once, not as an echo."""
+        key = (proc["id"] if proc else None, resolver)
+        prev = self._last_resolver.get(key)
+        if prev is not None and t - prev["t"] <= 50_000_000:
+            prev["detail"]["count"] += 1
+            prev["title"] = f"{title} ×{prev['detail']['count']}"
+            return
+        self._last_resolver[key] = self.add(t, "dns", proc, title, "resolver", resolver=resolver, count=1, **detail)
+
+    def finish(self) -> list[dict]:
+        self.events.sort(key=lambda x: x["t"])
+        for i, e in enumerate(self.events):
+            e["id"] = f"e{i}"
+        return self.events
+
+
+class _Attribution:
+    """Who a proxy record belongs to: a pid from the join, resolved to the process that held it at that moment."""
+
+    def __init__(self, procs: list[dict], info: dict):
+        self.by_pid: dict[int, list[dict]] = defaultdict(list)
+        for p in procs:
+            self.by_pid[p["pid"]].append(p)
+        self.conn_attr = info.get("connections", {})
+        self.flow_attr = info.get("flows", {})  # per-request overrides: the sender on a socket several processes hold
+
+    def proc_at(self, pid: int | None, t_rel: int) -> dict | None:
+        cands = self.by_pid.get(pid, []) if pid is not None else []
         if not cands:
             return None
         live = [
@@ -191,38 +182,73 @@ def build(run_dir: Path | str) -> dict:
         ]
         return (live or cands)[-1]
 
-    conn_attr = info.get("connections", {})
+    def conn_proc(self, conn_id: str, t_rel: int, flow_id: str | None = None) -> tuple[dict | None, dict]:
+        a = self.flow_attr.get(flow_id) or self.conn_attr.get(conn_id) or {}
+        return self.proc_at(a.get("pid"), t_rel), a
 
-    flow_attr = info.get("flows", {})  # per-request overrides: the sender on a socket several processes hold
 
-    def conn_proc(conn_id: str, t_rel: int, flow_id: str | None = None) -> tuple[dict | None, dict]:
-        a = flow_attr.get(flow_id) or conn_attr.get(conn_id) or {}
-        return proc_at(a.get("pid"), t_rel), a
+class _Kernel:
+    """What reading the kernel events produced besides timeline entries."""
 
-    # ---- timeline events
-    ev: list[dict] = []
+    def __init__(self, ca_loads: int, proxy_connects: int, udp_probes: Counter):
+        self.ca_loads, self.proxy_connects, self.udp_probes = ca_loads, proxy_connects, udp_probes
 
-    def add(t: int, kind: str, proc: dict | None, title: str, sub: str | None = None, **detail) -> dict:
-        e = {"t": t, "kind": kind, "sub": sub, "proc": proc["id"] if proc else None, "title": title, "detail": detail}
-        ev.append(e)
-        return e
 
-    last_resolver: dict[tuple, dict] = {}
+def _load_optional(path: Path) -> list[dict]:
+    return load(path) if path.exists() else []
 
-    def add_resolver(t: int, proc: dict | None, resolver: str, title: str, **detail) -> None:
-        """glibc makes several socket calls per lookup; contacts with the same resolver by the same process within
-        50 ms are ONE event with a count, so the log shows the lookup once, not as an echo."""
-        key = (proc["id"] if proc else None, resolver)
-        prev = last_resolver.get(key)
-        if prev is not None and t - prev["t"] <= 50_000_000:
-            prev["detail"]["count"] += 1
-            prev["title"] = f"{title} ×{prev['detail']['count']}"
-            return
-        last_resolver[key] = add(t, "dns", proc, title, "resolver", resolver=resolver, count=1, **detail)
 
-    by_eid = {p["_eid"]: p for p in procs}
+def _time_zero(tr: list[dict], root_pid: int | None, notes: list[str]) -> int:
+    """T0 = the root process's exec of the real command (the wrapper's probe loop before it is dropped)."""
+    root_execs = [e["timestamp"] for e in tr if e["processId"] == root_pid and e["eventName"] == "sched_process_exec"]
+    if root_execs:
+        return min(root_execs)
+    if tr:
+        notes.append("The target's exec was not recorded; time zero is the first recorded event.")
+        return min(e["timestamp"] for e in tr)
+    notes.append("Tracee recorded no events for the target.")
+    return 0
+
+
+def _drop_wrapper_noise(tr: list[dict], root_pid: int | None, t0: int) -> list[dict]:
+    """Drop what the recorder's wrapper spawned BEFORE the root's exec (its probe loop). A time window is not enough:
+    such a child can exit a fraction of a millisecond after T0. Anything born before the root's exec, other than
+    the root itself, is not part of the target."""
+    born: dict[int, int] = {}
+    for e in tr:
+        born[e["processEntityId"]] = min(
+            born.get(e["processEntityId"], 1 << 62), e.get("threadStartTime") or e["timestamp"]
+        )
+    root_eids = {e["processEntityId"] for e in tr if e["processId"] == root_pid}
+    pre_exec = {eid for eid, b0 in born.items() if b0 < t0 - 1_000_000 and eid not in root_eids}
+    return [e for e in tr if e["processEntityId"] not in pre_exec and e["timestamp"] >= t0 - 1_000_000]
+
+
+def _align_clocks(
+    fl: list[dict], tr: list[dict], raw: list[dict], manifest: dict, t0: int, notes: list[str]
+) -> tuple[dict, _Clock]:
+    """Proxy monotonic stamps -> Tracee clock, from the join's calibration (or the start-of-run pair as a fallback)."""
+    info: dict = {}
+    capped = any(e.get("kind") == "cap_reached" for e in raw)
+    join_records(fl, tr, manifest.get("proxy_port"), info, tracee_capped=capped)
+    offset = info.get("offset_ns")
+    source = "anchors"
+    if offset is None:
+        started = manifest.get("started", {})
+        offset = (started.get("t_wall_ns", 0) - started.get("t_mono_ns", 0)) if started else 0
+        source = "manifest-pair"
+        notes.append(
+            "No unambiguous (connection, connect) pair was available to align the proxy and kernel clocks; the "
+            "alignment uses the start-of-run clock pair and may be off by a second or two where the wall clock stepped."
+        )
+    return info, _Clock(offset, source, t0)
+
+
+def _kernel_events(
+    tr: list[dict], by_eid: dict, t0: int, proxy_port: int | None, ca_path: str, tl: _Timeline
+) -> _Kernel:
+    """Tracee events -> timeline entries (exec, exit, tcp, unix, udp, resolver contacts, watched file opens)."""
     dns_probe_until: dict[int, int] = {}  # eid -> abs ts until which UDP connects are lookup probes
-    ca_path = str(run_dir.resolve() / "ca" / "mitmproxy-ca-cert.pem")
     ca_loads = 0
     proxy_connects = 0
     udp_probes = Counter()
@@ -233,7 +259,7 @@ def build(run_dir: Path | str) -> dict:
         name = e["eventName"]
         if name == "sched_process_exec":
             argv = [str(x) for x in (a.get("argv") or [])]
-            add(
+            tl.add(
                 t,
                 "exec",
                 p,
@@ -245,13 +271,13 @@ def build(run_dir: Path | str) -> dict:
         elif name == "sched_process_exit":
             if a.get("process_group_exit"):
                 x = decode_exit(a)
-                add(t, "exit", p, x["status"], **x)
+                tl.add(t, "exit", p, x["status"], **x)
         elif name == "net_tcp_connect":
             dst, port = a.get("dst"), a.get("dst_port")
             if port == proxy_port:
                 proxy_connects += 1
                 continue
-            add(t, "tcp", p, f"{dst}:{port}", dst=dst, port=port, loopback=_is_loopback(str(dst)))
+            tl.add(t, "tcp", p, f"{dst}:{port}", dst=dst, port=port, loopback=_is_loopback(str(dst)))
         elif name == "security_socket_connect":
             ra = a.get("remote_addr") or {}
             fam, typ = ra.get("sa_family"), a.get("type")
@@ -261,109 +287,123 @@ def build(run_dir: Path | str) -> dict:
                 if res and p:
                     dns_probe_until[p["_eid"]] = e["timestamp"] + PROBE_WINDOW_NS
                 if res:
-                    add_resolver(t, p, res, f"lookup via {res}", path=path)
+                    tl.add_resolver(t, p, res, f"lookup via {res}", path=path)
                 else:
-                    add(t, "unix", p, path or "(abstract)", path=path)
+                    tl.add(t, "unix", p, path or "(abstract)", path=path)
             elif fam in ("AF_INET", "AF_INET6") and typ == 2:
                 ip = ra.get("sin_addr") or ra.get("sin6_addr")
                 port = int(ra.get("sin_port") or ra.get("sin6_port") or 0)
                 if port == 53 and p:
                     dns_probe_until[p["_eid"]] = e["timestamp"] + PROBE_WINDOW_NS
-                    add_resolver(t, p, f"{ip}:53", f"query sent to resolver {ip}", ip=ip)
+                    tl.add_resolver(t, p, f"{ip}:53", f"query sent to resolver {ip}", ip=ip)
                 else:
                     probe = bool(p and e["timestamp"] <= dns_probe_until.get(p["_eid"], 0))
                     if probe:
                         udp_probes[p["id"] if p else None] += 1
-                    add(t, "udp", p, f"{ip}:{port}", "probe" if probe else None, dst=ip, port=port, probe=probe)
+                    tl.add(t, "udp", p, f"{ip}:{port}", "probe" if probe else None, dst=ip, port=port, probe=probe)
         elif name == "security_file_open":
             path = a.get("pathname") or a.get("syscall_pathname") or ""
             if path == ca_path:
                 ca_loads += 1
                 continue
             mode = decode_open_flags(int(a.get("flags") or 0))
-            add(t, "file", p, f"{mode} {path}", mode, path=path, mode=mode, category=classify_path(path))
+            tl.add(t, "file", p, f"{mode} {path}", mode, path=path, mode=mode, category=classify_path(path))
+    return _Kernel(ca_loads, proxy_connects, udp_probes)
 
-    # ---- proxy-side records
-    tls_by_conn: dict[str, dict] = {}
-    resolve_by_conn: dict[str, dict] = {}
-    for r in fl:
-        if r["kind"] == "tls" and r["conn_id"] not in tls_by_conn:
-            tls_by_conn[r["conn_id"]] = {k: r.get(k) for k in ("version", "cipher", "alpn", "sni", "cert")}
-    results = {r["flow_id"]: r for r in fl if r["kind"] == "flow_result"}
 
+class _ProxyIndex:
+    """The proxy's flat record list, indexed the ways the row builders need."""
+
+    def __init__(self, fl: list[dict]):
+        self.tls_by_conn: dict[str, dict] = {}
+        for r in fl:
+            if r["kind"] == "tls" and r["conn_id"] not in self.tls_by_conn:
+                self.tls_by_conn[r["conn_id"]] = {k: r.get(k) for k in ("version", "cipher", "alpn", "sni", "cert")}
+        self.results = {r["flow_id"]: r for r in fl if r["kind"] == "flow_result"}
+        self.ws_msgs: dict[str, list[dict]] = defaultdict(list)
+        self.ws_close: dict[str, dict] = {}
+        self.ws_open: dict[str, dict] = {}
+        for r in fl:
+            if r["kind"] == "ws_message":
+                self.ws_msgs[r["flow_id"]].append(
+                    {"seq": r["seq"], "dir": r["dir"], "opcode": r["opcode"], "body": r["body"]}
+                )
+            elif r["kind"] == "ws_close":
+                self.ws_close[r["flow_id"]] = r
+            elif r["kind"] == "ws_open":
+                self.ws_open[r["flow_id"]] = r
+        self.port_by_conn = {r["conn_id"]: r.get("port") for r in fl if r["kind"] == "resolve"}
+        self.tls_refused = {r["conn_id"]: r for r in fl if r["kind"] == "tls_failed" and r.get("side") == "client"}
+        self.tls_ok = {r["conn_id"] for r in fl if r["kind"] == "tls_client"}
+
+
+def _http_rows(fl: list[dict], px: _ProxyIndex, clock: _Clock, who: _Attribution, tl: _Timeline) -> list[dict]:
+    """One row per proxied request (and one timeline event each)."""
     http: list[dict] = []
-    ws_msgs: dict[str, list[dict]] = defaultdict(list)
-    ws_close: dict[str, dict] = {}
-    ws_open: dict[str, dict] = {}
     for r in fl:
-        if r["kind"] == "ws_message":
-            ws_msgs[r["flow_id"]].append({"seq": r["seq"], "dir": r["dir"], "opcode": r["opcode"], "body": r["body"]})
-        elif r["kind"] == "ws_close":
-            ws_close[r["flow_id"]] = r
-        elif r["kind"] == "ws_open":
-            ws_open[r["flow_id"]] = r
-    port_by_conn = {r["conn_id"]: r.get("port") for r in fl if r["kind"] == "resolve"}
-    flow_conn = {}
-    for r in fl:
-        if r["kind"] == "flow":
-            t = rel_proxy(r)
-            p, attr = conn_proc(r["conn_id"], t, r["flow_id"])
-            res = results.get(r["flow_id"], {})
-            body_in, body_out = r.get("body") or {}, res.get("body") or {}
-            is_ws = r["flow_id"] in ws_open
-            status = res.get("status")
-            err = res.get("error")
-            title = f"{r['method']} {r['scheme']}://{r['host']}{r['path']}"
-            h = {
-                "id": r["flow_id"],
-                "t": t,
-                "proc": p["id"] if p else None,
-                "method": r["method"],
-                "scheme": r["scheme"],
-                "host": r["host"],
-                "path": r["path"],
-                "status": status,
-                "error": err,
-                "http_version": r.get("http_version"),
-                "port": port_by_conn.get(r["conn_id"]) or (443 if r["scheme"] in ("https", "wss") else 80),
-                "duration_ms": res.get("duration_ms"),
-                "ttfb_ms": res.get("ttfb_ms"),
-                "server_ip": res.get("server_ip"),
-                "req_headers": r.get("headers") or [],
-                "req_body": body_in,
-                "resp_headers": res.get("headers") or [],
-                "resp_body": body_out,
-                "conn_id": r["conn_id"],
-                "websocket": is_ws,
-                "tls": tls_by_conn.get(r["conn_id"]),
-                "attribution": {
-                    "method": attr.get("method"),
-                    "pid": attr.get("pid"),
-                    "candidates": attr.get("candidates", []),
-                    "opener": attr.get("opener"),
-                    "opener_proc": (proc_at(attr["opener"], t) or {}).get("id") if attr.get("opener") else None,
-                },
-            }
-            http.append(h)
-            flow_conn[r["flow_id"]] = r["conn_id"]
-            sub = "websocket" if is_ws else ("error" if err else None)
-            add(
-                t,
-                "http",
-                p,
-                title,
-                sub,
-                flow_id=r["flow_id"],
-                status=status,
-                error=err,
-                host=r["host"],
-                method=r["method"],
-            )
+        if r["kind"] != "flow":
+            continue
+        t = clock.rel(r)
+        p, attr = who.conn_proc(r["conn_id"], t, r["flow_id"])
+        res = px.results.get(r["flow_id"], {})
+        body_in, body_out = r.get("body") or {}, res.get("body") or {}
+        is_ws = r["flow_id"] in px.ws_open
+        status = res.get("status")
+        err = res.get("error")
+        title = f"{r['method']} {r['scheme']}://{r['host']}{r['path']}"
+        h = {
+            "id": r["flow_id"],
+            "t": t,
+            "proc": p["id"] if p else None,
+            "method": r["method"],
+            "scheme": r["scheme"],
+            "host": r["host"],
+            "path": r["path"],
+            "status": status,
+            "error": err,
+            "http_version": r.get("http_version"),
+            "port": px.port_by_conn.get(r["conn_id"]) or (443 if r["scheme"] in ("https", "wss") else 80),
+            "duration_ms": res.get("duration_ms"),
+            "ttfb_ms": res.get("ttfb_ms"),
+            "server_ip": res.get("server_ip"),
+            "req_headers": r.get("headers") or [],
+            "req_body": body_in,
+            "resp_headers": res.get("headers") or [],
+            "resp_body": body_out,
+            "conn_id": r["conn_id"],
+            "websocket": is_ws,
+            "tls": px.tls_by_conn.get(r["conn_id"]),
+            "attribution": {
+                "method": attr.get("method"),
+                "pid": attr.get("pid"),
+                "candidates": attr.get("candidates", []),
+                "opener": attr.get("opener"),
+                "opener_proc": (who.proc_at(attr["opener"], t) or {}).get("id") if attr.get("opener") else None,
+            },
+        }
+        http.append(h)
+        sub = "websocket" if is_ws else ("error" if err else None)
+        tl.add(
+            t,
+            "http",
+            p,
+            title,
+            sub,
+            flow_id=r["flow_id"],
+            status=status,
+            error=err,
+            host=r["host"],
+            method=r["method"],
+        )
+    return http
+
+
+def _websocket_rows(px: _ProxyIndex, clock: _Clock, who: _Attribution, tl: _Timeline) -> list[dict]:
     websockets = []
-    for fid, o in ws_open.items():
-        c = ws_close.get(fid, {})
-        t = rel_proxy(o)
-        p, _ = conn_proc(o["conn_id"], t)
+    for fid, o in px.ws_open.items():
+        c = px.ws_close.get(fid, {})
+        t = clock.rel(o)
+        p, _ = who.conn_proc(o["conn_id"], t)
         websockets.append(
             {
                 "flow_id": fid,
@@ -379,14 +419,14 @@ def build(run_dir: Path | str) -> dict:
                 "messages": c.get("messages") or {},
                 "bytes": c.get("bytes") or {},
                 "suppressed": (c.get("suppressed") or {}).get("records", 0),
-                "t_close": rel_proxy(c) if c else None,
-                "log": ws_msgs.get(fid, []),
+                "t_close": clock.rel(c) if c else None,
+                "log": px.ws_msgs.get(fid, []),
             }
         )
-        add(t, "ws", p, f"websocket {o['host']}{o['path']}", "open", flow_id=fid)
+        tl.add(t, "ws", p, f"websocket {o['host']}{o['path']}", "open", flow_id=fid)
         if c:
-            add(
-                rel_proxy(c),
+            tl.add(
+                clock.rel(c),
                 "ws",
                 p,
                 f"websocket closed {c.get('close_code')}",
@@ -394,30 +434,32 @@ def build(run_dir: Path | str) -> dict:
                 flow_id=fid,
                 clean=c.get("clean"),
             )
-    tunnels = [r for r in fl if r["kind"] == "connect"]
-    tls_refused = {r["conn_id"]: r for r in fl if r["kind"] == "tls_failed" and r.get("side") == "client"}
-    tls_ok = {r["conn_id"] for r in fl if r["kind"] == "tls_client"}
+    return websockets
 
-    def tunnel_note(conn_id: str, res: dict) -> str | None:
-        """Why a CONNECT tunnel produced no request, when the proxy saw the reason."""
-        if conn_id in tls_refused:
-            return (
-                "client refused the recorder's certificate (pinning, or it does not trust the CA): content not recorded"
-            )
-        if conn_id in tls_ok and not res.get("status"):
-            return (
-                "TLS completed, then the client sent no request (a certificate pin checked after the handshake "
-                "looks like this; so does an idle pre-connect)"
-            )
-        return None
 
-    with_flows = {h["conn_id"] for h in http}
-    for r in tunnels:
-        if r["conn_id"] in with_flows:
+def _tunnel_note(px: _ProxyIndex, conn_id: str, res: dict) -> str | None:
+    """Why a CONNECT tunnel produced no request, when the proxy saw the reason."""
+    if conn_id in px.tls_refused:
+        return "client refused the recorder's certificate (pinning, or it does not trust the CA): content not recorded"
+    if conn_id in px.tls_ok and not res.get("status"):
+        return (
+            "TLS completed, then the client sent no request (a certificate pin checked after the handshake "
+            "looks like this; so does an idle pre-connect)"
+        )
+    return None
+
+
+def _tunnel_rows(
+    fl: list[dict], px: _ProxyIndex, with_flows: set, clock: _Clock, who: _Attribution, tl: _Timeline
+) -> list[dict]:
+    """CONNECT tunnels that never carried a request (refused, failed, non-HTTP), so they still show up."""
+    rows = []
+    for r in fl:
+        if r["kind"] != "connect" or r["conn_id"] in with_flows:
             continue
-        t = rel_proxy(r)
-        p, attr = conn_proc(r["conn_id"], t)
-        res = results.get(r["flow_id"], {})
+        t = clock.rel(r)
+        p, attr = who.conn_proc(r["conn_id"], t)
+        res = px.results.get(r["flow_id"], {})
         h = {
             "id": r["flow_id"],
             "t": t,
@@ -428,7 +470,7 @@ def build(run_dir: Path | str) -> dict:
             "path": f":{r['port']}",
             "port": r["port"],
             "status": res.get("status"),
-            "error": res.get("error") or tunnel_note(r["conn_id"], res),
+            "error": res.get("error") or _tunnel_note(px, r["conn_id"], res),
             "http_version": None,
             "duration_ms": None,
             "ttfb_ms": None,
@@ -440,15 +482,15 @@ def build(run_dir: Path | str) -> dict:
             "conn_id": r["conn_id"],
             "websocket": False,
             "tls": None,
-            "tls_refused": tls_refused[r["conn_id"]]["error"] if r["conn_id"] in tls_refused else None,
+            "tls_refused": px.tls_refused[r["conn_id"]]["error"] if r["conn_id"] in px.tls_refused else None,
             "attribution": {
                 "method": attr.get("method"),
                 "pid": attr.get("pid"),
                 "candidates": attr.get("candidates", []),
             },
         }
-        http.append(h)
-        add(
+        rows.append(h)
+        tl.add(
             t,
             "http",
             p,
@@ -458,14 +500,19 @@ def build(run_dir: Path | str) -> dict:
             error=res.get("error"),
             host=r["host"],
         )
+    return rows
 
-    # ---- DNS as the proxy saw it (name asked for -> address returned)
+
+def _resolved_names(
+    fl: list[dict], clock: _Clock, who: _Attribution, tl: _Timeline
+) -> tuple[dict[str, dict], dict[str, str]]:
+    """DNS as the proxy saw it (name asked for -> address returned)."""
     resolved: dict[str, dict] = {}
     for r in fl:
         if r["kind"] != "resolve":
             continue
-        t = rel_proxy(r)
-        p, _ = conn_proc(r["conn_id"], t)
+        t = clock.rel(r)
+        p, _ = who.conn_proc(r["conn_id"], t)
         d = resolved.setdefault(
             r["name"],
             {
@@ -483,34 +530,31 @@ def build(run_dir: Path | str) -> dict:
         for key, val in (("ips", r.get("ip")), ("ports", r.get("port")), ("procs", p["id"] if p else None)):
             if val is not None and val not in d[key]:
                 d[key].append(val)
-        resolve_by_conn[r["conn_id"]] = r
         if not d["ip_literal"]:
-            add(t, "dns", p, f"{r['name']} → {r.get('ip')}", "resolve", name=r["name"], ip=r.get("ip"))
+            tl.add(t, "dns", p, f"{r['name']} → {r.get('ip')}", "resolve", name=r["name"], ip=r.get("ip"))
     ip_to_name = {ip: n for n, d in resolved.items() if not d["ip_literal"] for ip in d["ips"]}
+    return resolved, ip_to_name
 
-    ev.sort(key=lambda x: x["t"])
-    for i, e in enumerate(ev):
-        e["id"] = f"e{i}"
-    # an HTTP record's event is its own http event; a websocket's open/close events share the flow id and must not
-    # overwrite it (the upgrade request is what evidence should point at)
+
+def _link_http_events(http: list[dict], ev: list[dict]) -> None:
+    """An HTTP record's event is its own http event; a websocket's open/close events share the flow id and must not
+    overwrite it (the upgrade request is what evidence should point at)."""
     ev_by_flow = {e["detail"]["flow_id"]: e["id"] for e in ev if e["kind"] == "http" and e["detail"].get("flow_id")}
     for h in http:
         h["event"] = ev_by_flow.get(h["id"])
 
-    # ---- aggregates
-    destinations = _destinations(http, ev, ip_to_name, procs)
-    dns = _dns(ev, resolved, udp_probes, ip_to_name)
-    for p in procs:
-        c = p["counts"]
-        for e in ev:
-            if e["proc"] != p["id"]:
-                continue
+
+def _count_events_per_process(procs: list[dict], ev: list[dict]) -> None:
+    by_id = {p["id"]: p for p in procs}
+    for e in ev:
+        p = by_id.get(e["proc"])
+        if p is not None:
+            c = p["counts"]
             c[e["kind"]] = c.get(e["kind"], 0) + 1
 
-    end_t = max([e["t"] for e in ev] + [p["end"] or 0 for p in procs] + [0])
-    root = next((p for p in procs if p["parent"] is None and p["pid"] == root_pid), procs[0] if procs else None)
-    run_end = next((p["end"] for p in procs if root and p["id"] == root["id"] and p["end"] is not None), end_t)
 
+def _closing_notes(notes: list[str], manifest: dict, ca_loads: int) -> None:
+    """What the model cannot see, stated where the reader will find it."""
     if ca_loads:
         notes.append(
             f"{pl(ca_loads, 'open')} of the recorder's own CA bundle (loaded by TLS clients) "
@@ -526,51 +570,31 @@ def build(run_dir: Path | str) -> dict:
     notes.append("UDP payloads (including QUIC/HTTP3) are never recorded; a UDP connect() is shown, not its traffic.")
     notes.append("Redaction is heuristic: treat the underlying run directory as sensitive.")
 
-    model = {
-        "schema": SCHEMA,
-        "generator": {"tracewatch": __version__},
-        "run": _run_meta(manifest, integ, root, run_end),
-        "integrity": {k: v for k, v in integ.items() if k not in ("files",)} | {"files": integ.get("files", {})},
-        "clock": {"source": clock_source, "offset_ns": offset, "votes": info.get("votes", 0), "t0_tracee_ns": t0},
-        "processes": [{k: v for k, v in p.items() if not k.startswith("_")} for p in procs],
-        "events": ev,
-        "http": sorted(http, key=lambda h: h["t"]),
-        "websockets": websockets,
-        "destinations": destinations,
-        "dns": dns,
-        "notes": notes,
-        "redactions": manifest.get("redactions") or {},
-        "recorder_events": [
-            {
-                "t": e["t_mono_ns"] + offset - t0,
-                "kind": e["kind"],
-                **{k: v for k, v in e.items() if k in ("component", "cap", "reason", "signal")},
-            }
-            for e in rec_events
-            if e["kind"]
-            in (
-                "component_died",
-                "cap_reached",
-                "signal_received",
-                "target_stopped",
-                "target_killed",
-                "recording_armed",
-            )
-        ],
-        "stats": {
-            "processes": len(procs),
-            "max_depth": max([p["depth"] for p in procs] + [0]),
-            "events": len(ev),
-            "http": len(http),
-            "websockets": len(websockets),
-            "destinations": len(destinations),
-            "dns_names": len(dns["resolved"]),
-            "files": sum(1 for e in ev if e["kind"] == "file"),
-            "proxy_connects": proxy_connects,
-            "duration_ns": run_end,
-            "commands": sum(1 for e in ev if e["kind"] == "exec"),
-        },
-    }
+
+_RECORDER_EVENT_KINDS = (
+    "component_died",
+    "cap_reached",
+    "signal_received",
+    "target_stopped",
+    "target_killed",
+    "recording_armed",
+)
+
+
+def _recorder_events(rec_events: list[dict], clock: _Clock) -> list[dict]:
+    return [
+        {
+            "t": e["t_mono_ns"] + clock.offset - clock.t0,
+            "kind": e["kind"],
+            **{k: v for k, v in e.items() if k in ("component", "cap", "reason", "signal")},
+        }
+        for e in rec_events
+        if e["kind"] in _RECORDER_EVENT_KINDS
+    ]
+
+
+def _attach_findings(model: dict) -> None:
+    """Run the rules, then mark each process with its most severe finding and the findings that cite it."""
     model["findings"] = find(model)
     model["catalog"] = (
         CATALOG  # the finding dictionary: what each rule means, its benign look-alikes, its evidence status
@@ -585,6 +609,79 @@ def build(run_dir: Path | str) -> dict:
         p["severity"] = names.get(sev_by_proc.get(p["id"], -1)) if p["id"] in sev_by_proc else None
         p["findings"] = [f["id"] for f in model["findings"] if p["id"] in f["procs"]]
     model["stats"]["findings"] = {s: sum(1 for f in model["findings"] if f["severity"] == s) for s in order}
+
+
+def build(run_dir: Path | str) -> dict:
+    """Read a run directory and assemble the model. The steps run in a fixed order (the event log is built up in that
+    order before it is sorted, so the order is part of the output)."""
+    run_dir = Path(run_dir)
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    integ = assess(run_dir)
+    fl = _load_optional(run_dir / "flows.jsonl")
+    raw = _load_optional(run_dir / "tracee.jsonl")
+    rec_events = _load_optional(run_dir / "events.jsonl")
+    tr = [e for e in raw if "eventName" in e and e.get("processName") != "twprobe"]
+    notes: list[str] = []
+    root_pid = manifest.get("root_pid")
+
+    # time zero, the target's own events only, and the proxy clock mapped onto the kernel clock
+    t0 = _time_zero(tr, root_pid, notes)
+    tr = _drop_wrapper_noise(tr, root_pid, t0)
+    info, clock = _align_clocks(fl, tr, raw, manifest, t0, notes)
+
+    # processes, then everything that happened, in the order the timeline is built
+    procs = _build_processes(tr, root_pid, t0)
+    who = _Attribution(procs, info)
+    tl = _Timeline()
+    ca_path = str(run_dir.resolve() / "ca" / "mitmproxy-ca-cert.pem")
+    kernel = _kernel_events(tr, {p["_eid"]: p for p in procs}, t0, manifest.get("proxy_port"), ca_path, tl)
+    px = _ProxyIndex(fl)
+    http = _http_rows(fl, px, clock, who, tl)
+    websockets = _websocket_rows(px, clock, who, tl)
+    http += _tunnel_rows(fl, px, {h["conn_id"] for h in http}, clock, who, tl)
+    resolved, ip_to_name = _resolved_names(fl, clock, who, tl)
+    ev = tl.finish()
+    _link_http_events(http, ev)
+
+    # aggregates
+    destinations = _destinations(http, ev, ip_to_name, procs)
+    dns = _dns(ev, resolved, kernel.udp_probes, ip_to_name)
+    _count_events_per_process(procs, ev)
+    end_t = max([e["t"] for e in ev] + [p["end"] or 0 for p in procs] + [0])
+    root = next((p for p in procs if p["parent"] is None and p["pid"] == root_pid), procs[0] if procs else None)
+    run_end = next((p["end"] for p in procs if root and p["id"] == root["id"] and p["end"] is not None), end_t)
+    _closing_notes(notes, manifest, kernel.ca_loads)
+
+    model = {
+        "schema": SCHEMA,
+        "generator": {"tracewatch": __version__},
+        "run": _run_meta(manifest, integ, root, run_end),
+        "integrity": {k: v for k, v in integ.items() if k not in ("files",)} | {"files": integ.get("files", {})},
+        "clock": {"source": clock.source, "offset_ns": clock.offset, "votes": info.get("votes", 0), "t0_tracee_ns": t0},
+        "processes": [{k: v for k, v in p.items() if not k.startswith("_")} for p in procs],
+        "events": ev,
+        "http": sorted(http, key=lambda h: h["t"]),
+        "websockets": websockets,
+        "destinations": destinations,
+        "dns": dns,
+        "notes": notes,
+        "redactions": manifest.get("redactions") or {},
+        "recorder_events": _recorder_events(rec_events, clock),
+        "stats": {
+            "processes": len(procs),
+            "max_depth": max([p["depth"] for p in procs] + [0]),
+            "events": len(ev),
+            "http": len(http),
+            "websockets": len(websockets),
+            "destinations": len(destinations),
+            "dns_names": len(dns["resolved"]),
+            "files": sum(1 for e in ev if e["kind"] == "file"),
+            "proxy_connects": kernel.proxy_connects,
+            "duration_ns": run_end,
+            "commands": sum(1 for e in ev if e["kind"] == "exec"),
+        },
+    }
+    _attach_findings(model)
     return model
 
 
