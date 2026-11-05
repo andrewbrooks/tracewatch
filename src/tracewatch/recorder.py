@@ -54,6 +54,9 @@ class Options:
     soft_flows_bytes: int = 64 * 1024 * 1024  # soft: bodies are no longer stored
     max_tracee_bytes: int = 256 * 1024 * 1024
     body_cap: int = 8192  # stored characters per body, after redaction
+    ws_max_records: int = 10000  # websocket message records per connection (the rest are only counted)
+    ws_budget_chars: int = 262144  # stored websocket message text per connection
+    ws_msg_cap: int = 2048  # stored characters per websocket message
     quiet: bool = False
 
 
@@ -146,6 +149,9 @@ def record(o: Options) -> int:
             "soft_flows_bytes": o.soft_flows_bytes,
             "max_tracee_bytes": o.max_tracee_bytes,
             "body_cap_chars": o.body_cap,
+            "ws_max_records": o.ws_max_records,
+            "ws_budget_chars": o.ws_budget_chars,
+            "ws_msg_cap": o.ws_msg_cap,
         },
         "lost_components": lost,
         "degraded": False,
@@ -237,6 +243,9 @@ def record(o: Options) -> int:
             TW_FLOWS=str(run.p(FLOWS)),
             TW_REDACT_KEY=redactor.key.hex(),
             TW_BODY_CAP=str(o.body_cap),
+            TW_WS_MAX_RECORDS=str(o.ws_max_records),
+            TW_WS_BUDGET=str(o.ws_budget_chars),
+            TW_WS_MSG_CAP=str(o.ws_msg_cap),
             TW_SOFT_FLOWS_BYTES=str(o.soft_flows_bytes),
             TW_MAX_FLOWS_BYTES=str(o.max_flows_bytes),
             TW_FLAGS_DIR=str(run.p("flags")),

@@ -9,7 +9,11 @@ dependencies = ["mitmproxy>=12.3"]
 tracewatch = "tracewatch.cli:main"
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = [
+    "pytest>=8",
+    "ruff>=0.6",
+    "websockets>=17.4",
+]
 
 [build-system]
 requires = ["hatchling"]

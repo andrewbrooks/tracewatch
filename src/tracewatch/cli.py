@@ -35,6 +35,9 @@ def main(argv: list[str] | None = None) -> int:
         help="if the proxy or Tracee dies: keep the target running (default; the gap is marked) or stop it",
     )
     r.add_argument("--kill-grace-s", type=float, default=10.0, help="with --on-component-loss stop: SIGKILL after this")
+    r.add_argument("--ws-max-records", type=int, default=10000, help="websocket message records per connection")
+    r.add_argument("--ws-budget-kb", type=float, default=256, help="stored websocket message text per connection")
+    r.add_argument("--ws-msg-cap", type=int, default=2048, help="stored characters per websocket message")
     r.add_argument("--quiet", action="store_true")
     r.add_argument("argv", nargs=argparse.REMAINDER, help="-- command [args...]")
     v = sub.add_parser("verify", help="what can be trusted in a run directory (exit 0 complete .. 4 unreadable)")
@@ -84,6 +87,9 @@ def main(argv: list[str] | None = None) -> int:
             on_recorder_death=a.on_recorder_death,
             on_component_loss=a.on_component_loss,
             kill_grace_s=a.kill_grace_s,
+            ws_max_records=a.ws_max_records,
+            ws_budget_chars=int(a.ws_budget_kb * 1024),
+            ws_msg_cap=a.ws_msg_cap,
         )
     )
 

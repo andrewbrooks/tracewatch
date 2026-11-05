@@ -5,6 +5,9 @@ Records (JSONL, one per line, written with a single os.write so a kill cannot in
   connect            a CONNECT tunnel request with its destination (so a tunnel that fails is still visible)
   flow               at REQUEST time (so a flow whose client/server vanished is still on disk)
   flow_result        status, headers, body or error, keyed by flow_id
+  ws_open / ws_message / ws_close   a websocket connection, each message (text redacted, binary described), and
+                     the close (code, reason, totals; 1006 / no frame = the peer vanished). The upgrade itself is an
+                     ordinary flow, so the join attributes every websocket to a pid exactly like an HTTP request.
   cap_reached        a size cap was hit (soft: bodies are no longer stored; hard: nothing more is written)
   redaction_summary / cap_summary   at shutdown: counts of redacted values / dropped records
   redaction_failed   a record that could not be redacted was DROPPED (content never written)
@@ -33,6 +36,9 @@ SOFT_CAP = int(os.environ.get("TW_SOFT_FLOWS_BYTES") or 0) or None  # past this,
 HARD_CAP = int(os.environ.get("TW_MAX_FLOWS_BYTES") or 0) or None  # past this, nothing more is written
 RESERVE = 16384  # headroom below the hard cap kept for cap markers and the final summaries
 RECORD_CAP = 262144  # no single record may exceed this; oversize records lose headers/body
+WS_MSG_CAP = int(os.environ.get("TW_WS_MSG_CAP") or 2048)  # stored characters per websocket message
+WS_BUDGET = int(os.environ.get("TW_WS_BUDGET") or 262144)  # stored characters of message text per connection
+WS_MAX_RECORDS = int(os.environ.get("TW_WS_MAX_RECORDS") or 10000)  # message records per connection
 FLAGS_DIR = os.environ.get("TW_FLAGS_DIR")
 _BIG_ENCODED = 64 * 1024  # br/zstd have no bounded decoder here: only attempt small ones
 
@@ -41,6 +47,7 @@ _written = 0
 _dropped: Counter = Counter()
 _hit = {"soft": False, "hard": False}
 _streams: dict = {}
+_ws: dict = {}  # flow_id -> per-connection websocket state
 _red = Redactor(bytes.fromhex(os.environ["TW_REDACT_KEY"])) if os.environ.get("TW_REDACT_KEY") else Redactor()
 
 
@@ -270,6 +277,8 @@ def request(flow: http.HTTPFlow) -> None:
 
 def responseheaders(flow: http.HTTPFlow) -> None:
     """Stream every response: forward each chunk immediately, keep a bounded copy for the record."""
+    if flow.response.status_code == 101:  # websocket upgrade: no body; the connection continues as websocket_*
+        return
     st = {"buf": bytearray(), "size": 0, "over": False}
     _streams[flow.id] = st
 
@@ -305,8 +314,102 @@ def response(flow: http.HTTPFlow) -> None:
     _emit("flow_result", build)
 
 
+def _ws_state(flow) -> dict:
+    return _ws.setdefault(
+        flow.id,
+        {
+            "seq": 0,
+            "stored": 0,
+            "records": 0,
+            "sup_records": 0,
+            "n": {"c2s": 0, "s2c": 0},
+            "bytes": {"c2s": 0, "s2c": 0},
+        },
+    )
+
+
+def websocket_start(flow: http.HTTPFlow) -> None:
+    _ws_state(flow)
+    _emit(
+        "ws_open",
+        lambda: {
+            "kind": "ws_open",
+            "flow_id": flow.id,
+            "conn_id": flow.client_conn.id,
+            "client_port": flow.client_conn.peername[1],
+            "host": flow.request.pretty_host,
+            "path": _red.url(flow.request.path),
+            "subprotocol": flow.response.headers.get("sec-websocket-protocol") if flow.response else None,
+        },
+    )
+
+
+def _ws_body(msg, st: dict) -> dict:
+    size = len(msg.content)
+    if not msg.is_text:
+        return {"size": size, "captured": False, "reason": "binary"}
+    if not _bodies_allowed():
+        return {"size": size, "captured": False, "reason": "size cap: bodies disabled"}
+    if st["stored"] >= WS_BUDGET:
+        return {"size": size, "captured": False, "reason": "websocket connection budget"}
+    if size > PROCESS_CAP:
+        return {"size": size, "captured": False, "reason": "too large to redact"}
+    text = msg.content.decode("utf-8", "replace")
+    ct = "application/json" if text.lstrip()[:1] in ("{", "[") else "text/plain"
+    rec = _red.body(ct, size, lambda: text, WS_MSG_CAP)
+    st["stored"] += len(rec.get("text", ""))
+    return rec
+
+
+def websocket_message(flow: http.HTTPFlow) -> None:
+    msg = flow.websocket.messages[-1]
+    st = _ws_state(flow)
+    d = "c2s" if msg.from_client else "s2c"
+    seq = st["seq"]
+    st["seq"] += 1
+    st["n"][d] += 1
+    st["bytes"][d] += len(msg.content)
+    if st["records"] >= WS_MAX_RECORDS:  # keep counting, stop writing: the close summary carries the totals
+        st["sup_records"] += 1
+        return
+    st["records"] += 1
+    _emit(
+        "ws_message",
+        lambda: {
+            "kind": "ws_message",
+            "flow_id": flow.id,
+            "seq": seq,
+            "dir": d,
+            "opcode": "text" if msg.is_text else "binary",
+            "body": _ws_body(msg, st),
+            "msg_ts": msg.timestamp,
+        },
+    )
+
+
+def websocket_end(flow: http.HTTPFlow) -> None:
+    st = _ws.pop(flow.id, None) or {"n": {"c2s": 0, "s2c": 0}, "bytes": {"c2s": 0, "s2c": 0}, "sup_records": 0}
+    ws = flow.websocket
+    code = ws.close_code if ws else None
+    _emit(
+        "ws_close",
+        lambda: {
+            "kind": "ws_close",
+            "flow_id": flow.id,
+            "close_code": code,
+            "close_reason": _red.text(ws.close_reason) if ws and ws.close_reason else None,
+            "closed_by_client": ws.closed_by_client if ws else None,
+            "clean": code is not None and code != 1006,  # 1006 = abnormal closure: no close frame was exchanged
+            "messages": st["n"],
+            "bytes": st["bytes"],
+            "suppressed": {"records": st["sup_records"]},
+        },
+    )
+
+
 def error(flow: http.HTTPFlow) -> None:
     _streams.pop(flow.id, None)
+    _ws.pop(flow.id, None)
     _emit("flow_result", lambda: {"kind": "flow_result", "flow_id": flow.id, "error": _red.text(str(flow.error))})
 
 
