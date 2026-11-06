@@ -44,6 +44,7 @@ SECRET_SHAPES = r"ghp_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]
 FIXTURE_FILES = ("tests/test_audit.py",)  # holds fake leaks on purpose, to test this very script
 FAKE_SECRET_FILES = (
     "tests/test_redact.py",
+    "tests/test_filecapture.py",  # fake key text written to temp files, to test capture and redaction
     "tests/integration/canary.sh",
     "tests/fixtures/badactor.sh",
     "src/tracewatch/redact.py",
