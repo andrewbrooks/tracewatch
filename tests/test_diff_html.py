@@ -53,5 +53,7 @@ def test_nonce_is_fresh_and_matches_the_style_element(tmp_path):
 
 def test_no_external_references_and_no_dark_only_literals(tmp_path):
     out = page(tmp_path)
-    assert not re.search(r"(?:src|href)\s*=|https?://|@import|url\(", out, re.I)
+    assert not re.search(r"src\s*=|https?://|@import|url\(", out, re.I)
+    assert not re.search(r"href\s*=\s*(?![\"']#)", out, re.I)  # only in-page jump links (#section), nothing is fetched
+    assert "style=" not in out  # the CSP has no inline-style allowance
     assert "prefers-color-scheme: light" in out and 'name="color-scheme"' in out
