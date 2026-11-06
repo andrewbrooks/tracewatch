@@ -15,6 +15,7 @@ EVENTS = "events.jsonl"  # the recorder's own log: component start/death, heartb
 FLOWS = "flows.jsonl"  # proxy records (connections, flows, results)
 TRACEE = "tracee.jsonl"  # Tracee events
 TRACEE_ERR = "tracee.err"
+FILES = "files.jsonl"  # contents of files the target created or wrote (see filecapture.py)
 MITM_LOG = "mitm.log"
 CA_DIR = "ca"
 CA_CERT = "ca/mitmproxy-ca-cert.pem"

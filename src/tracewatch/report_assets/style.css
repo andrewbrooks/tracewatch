@@ -319,3 +319,10 @@ details > summary { list-style: none; } details > summary::-webkit-details-marke
 /* wide screens: an open drawer takes its space from the page instead of covering the table */
 @media (min-width: 1120px) { #main { transition: margin-right .22s ease; } #app.drawer-open #main { margin-right: min(540px, 94vw); } }
 @media print { #app.drawer-open #main { margin-right: 0; } }
+
+/* ---------- Files tab: contents of files the target created or wrote ---------- */
+.fcontents { margin-top: 14px; padding: 12px 14px; } .fch { margin: 0 0 6px; font-size: 10.5px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; color: var(--text-2); }
+.fnote { margin: 4px 0 8px; font-size: 12px; }
+details.fc { border-top: 1px solid var(--line); padding: 2px 0; } details.fc > summary { cursor: pointer; padding: 8px 0; display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+details.fc > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; } .fpath { overflow-wrap: anywhere; }
+pre.fcode { max-height: 360px; margin: 6px 0 10px; }

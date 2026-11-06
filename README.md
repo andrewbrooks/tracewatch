@@ -39,7 +39,9 @@ For the command you launch (and everything it starts) it records:
 - the **process tree**: who started whom, with full command lines and exit codes
 - **network activity**: HTTP(S) requests and responses through the proxy (including HTTP/2 and websockets),
   which process sent each one, DNS lookups the proxy performed, and TCP connections that bypassed the proxy
-- **file activity** for a short watch list (credential stores, temp directories), not every file open
+- **file activity** for a short watch list (credential stores, temp directories), not every file open, and the
+  **contents of the files the process created or wrote** there (inert, size-capped, secrets redacted; files it only
+  read are never captured)
 - 24 rule-based **findings** (e.g. "wrote a file, then executed it", "credential sent over plain HTTP"),
   each pointing at the events that triggered it. Every rule has an entry in a built-in dictionary (what it means, what it
   cannot tell you, what benign activity looks the same, and whether it has ever fired on a real recording), shown in the

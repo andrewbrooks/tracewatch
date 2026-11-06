@@ -156,9 +156,33 @@ function filesView() {
   const watch = DATA.run.file_watch || [];
   const root = h('div', { class: 'view col', id: 'view-files' }, h('h2', { class: 'vt' }, 'Files'),
     h('p', { class: 'vsub' }, 'File opens are recorded only for a watch list of credential stores and temporary directories, not every open: watching everything would drown the signal and slow the target.'),
-    toolsRow(t.count), t.el, h('details', { class: 'card', style: { marginTop: '14px', padding: '10px 14px' } }, h('summary', { style: { cursor: 'pointer', color: 'var(--text-2)' } }, 'Watched path patterns (' + watch.length + ')'), h('pre', { class: 'code', style: { marginTop: '10px' } }, watch.join('\n') || '(not recorded)')));
+    toolsRow(t.count), t.el, fileContents(), h('details', { class: 'card', style: { marginTop: '14px', padding: '10px 14px' } }, h('summary', { style: { cursor: 'pointer', color: 'var(--text-2)' } }, 'Watched path patterns (' + watch.length + ')'), h('pre', { class: 'code', style: { marginTop: '10px' } }, watch.join('\n') || '(not recorded)')));
   root.onShow = () => t.refresh(); onState(() => { if (root.classList.contains('on')) t.refresh(); });
   return root;
+}
+
+function fileContents() {   // what the target left in files it created or wrote: stored inert and redacted, shown as text only
+  const fc = DATA.file_contents || [], cap = DATA.run.file_capture;
+  const who = id => { const p = DATA.processes.find(q => q.id === id); return p ? p.name + ' (' + p.pid + ')' : 'unattributed'; };
+  const item = f => {
+    const notes = [];
+    if (f.binary) notes.push('binary file: contents not stored');
+    if (f.truncated) notes.push('only the first part was captured (' + fmtB(f.size) + ' in all)');
+    if (f.redacted) notes.push('secrets were redacted');
+    if (f.dropped_by_cap) notes.push('not stored: the size cap for captured contents was reached');
+    const body = f.text !== undefined
+      ? h('pre', { class: 'code fcode', tabindex: '0', 'aria-label': 'Contents of ' + f.path }, f.text)
+      : h('p', { class: 'muted' }, f.binary ? 'First bytes (hex): ' + (f.head_hex || '') : 'No contents stored.');
+    return h('details', { class: 'fc' },
+      h('summary', null, h('span', { class: 'mono fpath' }, f.path), h('span', { class: 'muted' }, fmtB(f.size) + ' · written by ' + (f.writers.map(who).join(', ') || 'unattributed'))),
+      notes.length ? h('p', { class: 'muted fnote' }, notes.join(' · ')) : null, body,
+      f.sha256 ? h('p', { class: 'muted mono fnote' }, 'sha256 ' + f.sha256) : null);
+  };
+  const empty = !cap ? 'Contents were not captured for this recording.' : 'The target created or wrote no files on the watched paths.';
+  return h('section', { class: 'card fcontents', 'aria-label': 'File contents' },
+    h('h3', { class: 'fch' }, 'Contents of files the target created or wrote' + (fc.length ? ' (' + fc.length + ')' : '')),
+    h('p', { class: 'muted fnote' }, 'Watched paths only, and only files the target opened for writing; files it merely read are never captured. Shown as inert text: control and direction-changing characters are escaped, and known secret shapes are redacted.'),
+    fc.length ? fc.map(item) : h('p', { class: 'muted fnote' }, empty));
 }
 
 function eventsView() {

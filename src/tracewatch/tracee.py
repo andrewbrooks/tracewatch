@@ -172,6 +172,7 @@ class Collector(threading.Thread):
         transform=None,
         max_bytes: int | None = None,
         keep=None,
+        tap=None,
     ):
         super().__init__(daemon=True, name="tracee-collector")
         self.run_id, self.container, self.tracee_args = run_id, container, tracee_args
@@ -179,6 +180,7 @@ class Collector(threading.Thread):
         self.transform = transform  # bytes line -> bytes line (redaction); applied BEFORE the write
         self.redaction_failures = 0
         self.keep = keep  # bytes line -> bool; lines it rejects are counted in `filtered`, never written
+        self.tap = tap  # bytes line -> None, called with each kept RAW line (read-only; must never raise)
         self.filtered = 0
         self.watch_exit_pid: int | None = (
             None  # set to the root's pid: when its exit event is read, `exit_seen_at` is set
@@ -226,6 +228,8 @@ class Collector(threading.Thread):
                 if self.keep and not self.keep(data):
                     self.filtered += 1
                     continue
+                if self.tap:
+                    self.tap(data)
                 if self.transform:
                     try:
                         data = self.transform(data)

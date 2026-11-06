@@ -198,6 +198,26 @@ def _load_optional(path: Path) -> list[dict]:
     return load(path) if path.exists() else []
 
 
+def _file_contents(run_dir: Path, procs: list[dict]) -> list[dict]:
+    """What the target left in the files it created or wrote (see filecapture.py). The text was made inert and
+    redacted when it was captured; the writers are the pids that opened the file for writing, matched to processes."""
+    by_pid: dict[int, list[str]] = defaultdict(list)
+    for p in procs:
+        by_pid[p["pid"]].append(p["id"])
+    out = []
+    for r in _load_optional(run_dir / "files.jsonl"):
+        if not isinstance(r.get("path"), str):
+            continue
+        row = {
+            k: r[k]
+            for k in ("path", "size", "sha256", "binary", "truncated", "redacted", "dropped_by_cap", "head_hex", "text")
+            if k in r
+        }
+        row["writers"] = sorted({i for pid in r.get("writers") or [] for i in by_pid.get(pid, [])})
+        out.append(row)
+    return out
+
+
 def _time_zero(tr: list[dict], root_pid: int | None, notes: list[str]) -> int:
     """T0 = the root process's exec of the real command (the wrapper's probe loop before it is dropped)."""
     root_execs = [e["timestamp"] for e in tr if e["processId"] == root_pid and e["eventName"] == "sched_process_exec"]
@@ -660,6 +680,7 @@ def build(run_dir: Path | str) -> dict:
         "clock": {"source": clock.source, "offset_ns": clock.offset, "votes": info.get("votes", 0), "t0_tracee_ns": t0},
         "processes": [{k: v for k, v in p.items() if not k.startswith("_")} for p in procs],
         "events": ev,
+        "file_contents": _file_contents(run_dir, procs),
         "http": sorted(http, key=lambda h: h["t"]),
         "websockets": websockets,
         "destinations": destinations,
@@ -707,6 +728,7 @@ def _run_meta(manifest: dict, integ: dict, root: dict | None, run_end: int) -> d
         "lost_components": manifest.get("lost_components", []),
         "degraded": manifest.get("degraded"),
         "file_watch": manifest.get("file_watch") or [],
+        "file_capture": manifest.get("file_capture"),
     }
 
 

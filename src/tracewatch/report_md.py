@@ -336,6 +336,53 @@ def _files(m: dict, o: list[str]) -> None:
     )
 
 
+MD_FILE_LINES = 60  # lines of one file's content in the Markdown report (the JSON and HTML reports hold all of it)
+
+
+def _fenced(text: str) -> list[str]:
+    """Untrusted text as a fenced code block whose fence is longer than any run of backticks inside it, so nothing in
+    it can end the block. (The text was already made inert, control characters included, when it was captured.)"""
+    run = max((len(r) for r in re.findall(r"`+", text)), default=0)
+    fence = "`" * max(3, run + 1)
+    return [fence + "text", *text.rstrip("\n").split("\n"), fence]
+
+
+def _file_contents(m: dict, o: list[str]) -> None:
+    """What the target left in the files it created or wrote (watched paths only)."""
+    files = m.get("file_contents") or []
+    if not files:
+        return
+    pname = _namer(m)
+    o.append("## File contents (files the target created or wrote)\n")
+    o.append(
+        "Only files on the watched paths, and only those the target opened for writing; files it merely read are never "
+        "captured. Shown as inert text: control characters are escaped, known secret shapes are redacted.\n"
+    )
+    for f in files:
+        who = ", ".join(txt(pname(w)) for w in f["writers"]) or "unattributed"
+        bits = [size(f["size"]), f"written by {who}"]
+        if f.get("sha256"):
+            bits.append(f"sha256 {f['sha256'][:16]}…")
+        o.append(f"### {code(f['path'])}\n")
+        o.append(" · ".join(bits) + "\n")
+        if f.get("binary"):
+            o.append(f"_Binary file, contents not stored. First bytes (hex): `{txt(f.get('head_hex', ''))}`_\n")
+        elif "text" not in f:
+            o.append("_Not stored: the size cap for captured contents was reached._\n")
+        else:
+            lines = f["text"].rstrip("\n").split("\n")
+            shown = "\n".join(lines[:MD_FILE_LINES])
+            o.extend(_fenced(shown))
+            more = []
+            if len(lines) > MD_FILE_LINES:
+                more.append(f"{len(lines) - MD_FILE_LINES} more lines not shown here")
+            if f.get("truncated"):
+                more.append(f"only the first part of the file was captured ({size(f['size'])} in all)")
+            if f.get("redacted"):
+                more.append("secrets were redacted")
+            o.append(("\n_" + "; ".join(more) + "._\n") if more else "")
+
+
 def _integrity(m: dict, o: list[str]) -> None:
     """What can be trusted in the recording."""
     o.append("## Recording integrity\n")
@@ -369,6 +416,7 @@ def render(m: dict) -> str:
         _dns,
         _commands,
         _files,
+        _file_contents,
         _integrity,
         _notes,
     ):

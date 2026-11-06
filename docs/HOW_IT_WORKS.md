@@ -39,12 +39,31 @@ policy, the target is stopped or left running unrecorded. `tracewatch sweep` fin
 | `flows.jsonl` | One record per proxy event: connections, requests, results, TLS facts, DNS answers, websocket messages |
 | `tracee.jsonl` | Kernel events from Tracee |
 | `events.jsonl` | The recorder's own log: component starts and deaths, caps, heartbeats |
+| `files.jsonl` | What the target left in files it created or wrote on the watched paths (see below) |
 | `manifest.json` | Command, versions, policy, limits, status |
 
 **Secrets are redacted before anything is written.** A keyed hash gives each distinct secret a stable tag
 (`[REDACTED:bearer:1a2b3c4d]`), so you can tell two uses of the same token apart without storing it. If redaction fails
 for a line, the line is dropped, not written. Size caps (soft: stop storing bodies; hard: stop writing) keep a chatty
 run bounded, and the report says when a cap was hit.
+
+### File contents
+
+Only files the target **created or wrote** (opened for writing, on the watched paths) are captured; a file it merely
+read is never stored, so a credential store it opened does not end up in the recording. What the target writes is as
+attacker-controlled as anything else, so (`filecapture.py`):
+
+- a file is read only if it is a regular file, opened one path component at a time with `O_NOFOLLOW` (a symlink swapped
+  in after the event cannot redirect the read) and without blocking (a FIFO cannot hang the recorder);
+- at most 16 KiB per file, 256 KiB and 100 files per run; binary files keep only their size, hash and first bytes;
+- text is made inert before it is stored: control characters, bidirectional overrides and invisible characters become
+  visible `⟦\x1b⟧` escapes, then the same redaction as everything else is applied; the HTML report shows it as text nodes
+  only and the Markdown report fences it with a fence longer than anything inside it.
+
+A file that is written, run and deleted within milliseconds is gone before Tracee's event reaches the recorder. To catch
+that case a small inotify watcher on `/tmp`, `/var/tmp` and `/dev/shm` keeps the last 16 KiB of each file closed after
+writing **in memory only, for ten seconds**; it is written out only if Tracee then names the traced process as the
+writer of that path, and is discarded otherwise.
 
 ## Reconstruction (`tracewatch report`)
 

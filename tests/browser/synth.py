@@ -1,5 +1,6 @@
 """Synthetic run directories for the browser tests (no Docker): a hostile one and a large one."""
 
+import json
 import sys
 from pathlib import Path
 
@@ -28,7 +29,11 @@ def hostile_run(tmp: Path) -> Path:
         ]
     )
     tr.append(te("sched_process_exec", 6, 111, 1, T0 + 3 * S, comm=HOSTILE[:15], pathname="/tmp/x", argv=[HOSTILE]))
-    return make_run(tmp, tr, f)
+    run = make_run(tmp, tr, f)
+    rec = {"path": "/tmp/" + HOSTILE, "size": 99, "sha256": "ab" * 32, "writers": [5], "binary": False, "truncated": False,
+           "text": HOSTILE + "\n\x1b[2J\x1b]0;pwned\x07\u202egnp.exe\n"}  # fmt: skip
+    (run / "files.jsonl").write_text(json.dumps(rec) + "\n")
+    return run
 
 
 def big_run(tmp: Path, nproc: int = 1500, nev: int = 6000) -> Path:

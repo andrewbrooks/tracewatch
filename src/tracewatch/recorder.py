@@ -21,6 +21,7 @@ from pathlib import Path
 
 from . import __version__, tracee
 from .clock import stamp
+from .filecapture import FILES, FileCapture
 from .procinfo import start_ticks
 from .redact import Redactor
 from .rundir import CA_CERT, CA_DIR, FLOWS, MITM_LOG, TRACEE, TRACEE_ERR, EventLog, RunDir
@@ -149,6 +150,7 @@ class _Recording:
         self.procs: dict[str, subprocess.Popen] = {}
         self.cname = f"tw-{self.run.run_id}"
         self.collector: tracee.Collector | None = None
+        self.filecap: FileCapture | None = None
         self.root: subprocess.Popen | None = None
         self.kill_deadline: list[float] = []  # set once the target has been asked to stop on our initiative
         self.caps_hit: list[str] = []  # e.g. "proxy:soft", "proxy:hard", "tracee:hard": data was deliberately not kept
@@ -324,6 +326,7 @@ class _Recording:
         run.p("flags/p1").touch()
         watch = tracee.file_watch_patterns()
         m["file_watch"] = watch  # the ONLY paths whose opens are recorded: the report must say so
+        filecap = self.filecap = FileCapture(redactor, run.p(FILES), skip_prefixes=(str(run.path),))
         collector = self.collector = tracee.Collector(
             run.run_id,
             self.cname,
@@ -332,9 +335,11 @@ class _Recording:
             run.p(TRACEE_ERR),
             transform=redactor.tracee_line,
             keep=tracee.keep_line,
+            tap=filecap.tap,
             max_bytes=o.max_tracee_bytes,
         )
         collector.watch_exit_pid = self.root.pid
+        filecap.start()
         collector.start()
         ev.emit("component_started", component="tracee", container=self.cname, host_pid=hp)
         for _ in range(180):
@@ -417,6 +422,7 @@ class _Recording:
         collector.join(timeout=15)
         collector.stop()
         tracee.remove(cname)
+        self.filecap.finish()  # the last look at every file the target wrote, then files.jsonl
         if procs["mitm"].poll() is None:
             procs["mitm"].terminate()
             try:
@@ -427,6 +433,7 @@ class _Recording:
         summaries = last_records(run.p(FLOWS), {"redaction_summary", "cap_summary"})
         removed = run.remove_ca_private_material()
         ev.emit("ca_private_material_removed", files=removed)
+        m["file_capture"] = self.filecap.summary()
         m["caps"] = {
             "proxy": summaries.get("cap_summary"),  # None if the proxy was killed before its shutdown hook ran
             "tracee": {
@@ -443,6 +450,7 @@ class _Recording:
             degraded=bool(lost),
             redactions={
                 "recorder": dict(redactor.counts),
+                "file_contents": dict(self.filecap.redactor.counts),
                 "tracee_lines_dropped": collector.redaction_failures,
                 "proxy": (summaries.get("redaction_summary") or {}).get("counts"),
             },

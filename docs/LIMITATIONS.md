@@ -12,6 +12,12 @@ tracewatch is an experiment, not a security product. This is what it does not do
 - **File activity is a short watch list**, not every file: credential stores (SSH, cloud, `.env`, private keys) and
   temporary directories. Something written to a path outside the list is invisible, which includes persistence such as
   editing `~/.bashrc` or a crontab.
+- **File contents are a best effort**, for files the target created or wrote on that same watch list. Not captured:
+  files only read (by design), anything outside the list, files bigger than 16 KiB beyond their first 16 KiB, anything
+  past the per-run caps (256 KiB, 100 files), and a file written and deleted within about a tenth of a millisecond of its
+  directory being created, or inside a temp directory that already existed when the run began, if it is also deleted
+  before the recorder looks. Redaction recognises known secret shapes; it is not a guarantee that no secret is stored,
+  so treat `files.jsonl` like the rest of the recording.
 - **DNS:** names the proxy resolved are exact. For a process that resolves a name itself, only the contact with the
   resolver is visible, not the name.
 - **No syscall-level behaviour** beyond process start/exit, connects, sends and the watched opens.

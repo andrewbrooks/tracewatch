@@ -1013,6 +1013,11 @@ def run_hostile(b):
     p.wait_for_timeout(400)
     body = p.evaluate("document.body.innerText")
     check("hostile strings are rendered as visible TEXT", "window.__pwned=1" in body)
+    s.tab("files")
+    p.locator("details.fc > summary").first.click()
+    shown = p.evaluate("document.querySelector('pre.fcode') ? document.querySelector('pre.fcode').textContent : null")
+    check("captured file contents are shown as plain text, markup and all", bool(shown) and "window.__pwned=1" in shown)
+    check("the section lists who wrote the file", "written by" in p.locator("details.fc > summary").first.inner_text())
     check("no hostile script ran (no global set, no dialog)", p.evaluate("window.__pwned") is None and not s.dialogs)
     check(
         "no injected elements: exactly the report's 2 script tags, no <img>, no inline handlers",
