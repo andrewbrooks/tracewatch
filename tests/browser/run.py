@@ -947,6 +947,20 @@ def run_a11y_structure(b, path):
         "a tree node is named by its visible text (no aria-label to disagree with it) and described in full",
         node.get_attribute("aria-label") is None and "pid" in (node.get_attribute("aria-description") or ""),
     )
+    s.tab("tree")
+    spot = p.evaluate(
+        """(() => { for (const g of document.querySelectorAll('g.node')) { const r = g.getBoundingClientRect();
+        if (r.left > 90 && r.top > 120 && r.right < innerWidth - 20 && r.bottom < innerHeight - 20)
+          return [r.left + r.width / 2, r.top + r.height / 2]; } return null; })()"""
+    )
+    p.mouse.move(spot[0] - 4, spot[1] - 3)
+    p.mouse.move(spot[0], spot[1])
+    p.wait_for_timeout(150)
+    tip_h = p.evaluate(
+        "(() => { const t = document.querySelector('.tip'); return t ? t.getBoundingClientRect().height : -1 })()"
+    )
+    check(f"a tooltip is only as tall as its text ({tip_h:.0f}px, not a 300px+ box)", 0 < tip_h < 200, tip_h)
+    p.mouse.move(2, 2)
     s.tab("timeline")
     check(
         "the scrolling timeline can be reached with the keyboard",

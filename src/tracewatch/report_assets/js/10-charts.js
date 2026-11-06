@@ -79,8 +79,8 @@ function activityChart(opts) {
     hit.addEventListener('pointermove', ev => {
       const b = bucketAt(ev); band.setAttribute('x', M.l + b.i * bw); band.setAttribute('display', '');
       if (drag) { const a = Math.min(drag, tAt(ev)), z = Math.max(drag, tAt(ev)); sel.setAttribute('display', ''); sel.setAttribute('x', x(a)); sel.setAttribute('width', Math.max(2, x(z) - x(a))); }
-      const rows = on.map(k => h('div', { class: 'tk' }, h('span', { class: 'keyln', style: { background: KC[k.id] } }), h('span', { class: 'tv num' }, fmtN(b.c[k.id])), h('span', { class: 'tl' }, k.label)));
-      showTip(ev.clientX, ev.clientY, [h('div', { class: 'tl' }, fmtAt(b.t0) + ' – ' + fmtAt(b.t1)), rows]);
+      const rows = on.map(k => h('div', { class: 'tk' }, h('span', { class: 'keyln', style: { background: KC[k.id] } }), h('span', { class: 'tv num' }, fmtN(b.c[k.id])), h('span', { class: 'tip-l' }, k.label)));
+      showTip(ev.clientX, ev.clientY, [h('div', { class: 'tip-l' }, fmtAt(b.t0) + ' – ' + fmtAt(b.t1)), rows]);
     });
     hit.addEventListener('pointerleave', () => { band.setAttribute('display', 'none'); hideTip(); });
     hit.addEventListener('pointerdown', ev => { hit.setPointerCapture(ev.pointerId); drag = tAt(ev); });
@@ -182,9 +182,9 @@ function activityLanes() {
       cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('display', '');
       if (drag !== null) { const a = Math.min(drag, t), zz = Math.max(drag, t); sel.setAttribute('display', ''); sel.setAttribute('x', x(a)); sel.setAttribute('width', Math.max(2, x(zz) - x(a))); }
       const li = Math.floor((y - T - FL) / LH), kind = li >= 0 ? lanes[li] : null, rows = [];
-      if (FL && y < T + FL) for (const f of near(fnd, t, 9).slice(0, 4)) rows.push(h('div', { class: 'tk' }, h('span', { class: 'tv' }, f.severity.toUpperCase()), h('span', { class: 'tl' }, short(f.title, 70))));
-      else if (kind) { const hits = near(byKind[kind.id], t, 5); for (const e of hits.slice(0, 4)) rows.push(h('div', { class: 'tk' }, h('span', { class: 'tv num' }, fmtAt(e.t)), h('span', { class: 'tl' }, short(e.title, 70)))); if (hits.length > 4) rows.push(h('div', { class: 'tl' }, '+' + (hits.length - 4) + ' more here')); }
-      showTip(ev.clientX, ev.clientY, [h('div', { class: 'tl' }, fmtAt(t) + (kind ? ' · ' + kind.label : '')), ...rows]);
+      if (FL && y < T + FL) for (const f of near(fnd, t, 9).slice(0, 4)) rows.push(h('div', { class: 'tk' }, h('span', { class: 'tv' }, f.severity.toUpperCase()), h('span', { class: 'tip-l' }, short(f.title, 70))));
+      else if (kind) { const hits = near(byKind[kind.id], t, 5); for (const e of hits.slice(0, 4)) rows.push(h('div', { class: 'tk' }, h('span', { class: 'tv num' }, fmtAt(e.t)), h('span', { class: 'tip-l' }, short(e.title, 70)))); if (hits.length > 4) rows.push(h('div', { class: 'tip-l' }, '+' + (hits.length - 4) + ' more here')); }
+      showTip(ev.clientX, ev.clientY, [h('div', { class: 'tip-l' }, fmtAt(t) + (kind ? ' · ' + kind.label : '')), ...rows]);
     });
     hit.addEventListener('pointerleave', () => { cross.setAttribute('display', 'none'); hideTip(); });
     hit.addEventListener('pointerdown', ev => { hit.setPointerCapture(ev.pointerId); drag = tAt(ev); });
@@ -229,7 +229,7 @@ function rankedBars(items, opts) {
       h('div', { class: 'n', title: it.label + (it.sev ? ' (' + it.sev + ' finding)' : '') }, it.flag ? h('span', { class: 'sev sev-medium', style: { marginRight: '6px' } }, 'DIRECT') : null, it.sev ? h('span', { class: 'sev sev-' + it.sev, style: { marginRight: '6px', padding: '0 4px' }, title: it.sev + ' finding' }, icon(SEVICON[it.sev], 11)) : null, it.label),
       h('div', { class: 'bar-track' }, h('div', { class: 'bar-fill', style: { width: (100 * it.value / max) + '%' } })),
       h('div', { class: 'num muted' }, it.right ?? fmtN(it.value)));
-    row.addEventListener('pointermove', ev => showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv num' }, it.right ?? fmtN(it.value)), h('div', { class: 'tt' }, it.label), it.sub ? h('div', { class: 'tl' }, it.sub) : null]));
+    row.addEventListener('pointermove', ev => showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv num' }, it.right ?? fmtN(it.value)), h('div', { class: 'tt' }, it.label), it.sub ? h('div', { class: 'tip-l' }, it.sub) : null]));
     row.addEventListener('pointerleave', hideTip);
     wrap.appendChild(row);
   }
@@ -254,14 +254,14 @@ function coverageStrip() {
     for (const g of mine) {
       const a = Math.max(0, relMono(g.start_mono)), z = g.end_mono ? relMono(g.end_mono) : DUR;
       const gap = h('div', { class: 'gap', style: { left: (100 * a / DUR) + '%', width: Math.max(0.8, 100 * (z - a) / DUR) + '%' } });
-      gap.addEventListener('pointermove', ev => showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv' }, 'Gap in ' + label), h('div', { class: 'tl' }, g.reason), h('div', { class: 'tt' }, fmtAt(a) + ' → ' + fmtAt(z))]));
+      gap.addEventListener('pointermove', ev => showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv' }, 'Gap in ' + label), h('div', { class: 'tip-l' }, g.reason), h('div', { class: 'tt' }, fmtAt(a) + ' → ' + fmtAt(z))]));
       gap.addEventListener('pointerleave', hideTip);
       lane.appendChild(gap);
     }
     if (DATA.integrity.untrusted_after_mono) {
       const ua = untrustedAt();
       const band = h('div', { class: 'untrusted', style: { left: (100 * ua / DUR) + '%', width: (100 - 100 * ua / DUR) + '%' } });
-      band.addEventListener('pointermove', ev => showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv' }, 'Untrusted'), h('div', { class: 'tl' }, 'The recorder had died: nothing after ' + fmtAt(ua) + ' can be vouched for.')]));
+      band.addEventListener('pointermove', ev => showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv' }, 'Untrusted'), h('div', { class: 'tip-l' }, 'The recorder had died: nothing after ' + fmtAt(ua) + ' can be vouched for.')]));
       band.addEventListener('pointerleave', hideTip);
       lane.appendChild(band);
     }

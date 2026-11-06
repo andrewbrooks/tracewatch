@@ -93,8 +93,8 @@ function timelineView() {
       let best = null, bd = 14;
       for (const e of r.evs) { if (e.t < d0 || e.t > d1) continue; const d = Math.abs(xOf(e.t) - mx); if (d < bd) { bd = d; best = e; } }
       hover = best;
-      if (best) showTip(ev.clientX, ev.clientY, [h('div', { class: 'tl' }, KINDS.find(z => z.id === groupOf(best)).label + ' · ' + fmtAt(best.t)), h('div', { class: 'tt' }, short(oneLine(best.title), 240)), r.p ? h('div', { class: 'tl' }, pLabel(r.p.id)) : null]);
-      else if (r.p) showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv' }, r.p.name + ' · ' + r.p.pid), h('div', { class: 'tl' }, (r.p.exit ? r.p.exit.status : 'no exit recorded') + ' · ' + fmtAt(r.p.start) + ' → ' + fmtAt(r.p.end))]); else hideTip();
+      if (best) showTip(ev.clientX, ev.clientY, [h('div', { class: 'tip-l' }, KINDS.find(z => z.id === groupOf(best)).label + ' · ' + fmtAt(best.t)), h('div', { class: 'tt' }, short(oneLine(best.title), 240)), r.p ? h('div', { class: 'tip-l' }, pLabel(r.p.id)) : null]);
+      else if (r.p) showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv' }, r.p.name + ' · ' + r.p.pid), h('div', { class: 'tip-l' }, (r.p.exit ? r.p.exit.status : 'no exit recorded') + ' · ' + fmtAt(r.p.start) + ' → ' + fmtAt(r.p.end))]); else hideTip();
     });
     bodySvg.addEventListener('pointerleave', hideTip);
     bodySvg.addEventListener('click', ev => { if (hover) setState({ sel: { type: 'event', id: hover.id } }); else { const r = rowAt(ev); if (r && r.p && ev.clientX - bodySvg.getBoundingClientRect().left > LABEL_W) setState({ sel: { type: 'proc', id: r.p.id } }); } });

@@ -140,7 +140,7 @@ function treeView() {
       g.addEventListener('click', () => setState({ sel: { type: 'proc', id } }));
       g.addEventListener('keydown', ev => nodeKey(ev, id));
       nodeEls.set(id, g);
-      g.addEventListener('pointermove', ev => showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv' }, p.name + ' · ' + p.pid), h('div', { class: 'tt' }, short(oneLine(p.cmdline), 220)), h('div', { class: 'tl' }, (p.exit ? p.exit.status : 'no exit recorded') + ' · ' + fmtAt(p.start) + ' → ' + fmtAt(p.end))]));
+      g.addEventListener('pointermove', ev => showTip(ev.clientX, ev.clientY, [h('div', { class: 'tv' }, p.name + ' · ' + p.pid), h('div', { class: 'tt' }, short(oneLine(p.cmdline), 220)), h('div', { class: 'tip-l' }, (p.exit ? p.exit.status : 'no exit recorded') + ' · ' + fmtAt(p.start) + ' → ' + fmtAt(p.end))]));
       g.addEventListener('pointerleave', hideTip);
       nodeG.appendChild(g);
     }

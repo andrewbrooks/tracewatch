@@ -149,7 +149,7 @@ h2.vt { margin: 0 0 3px; font-size: 18px; font-weight: 650; letter-spacing: .01e
 .bar-row .n { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } .bar-track { height: 8px; border-radius: 4px; background: rgba(var(--ink-rgb),.05); position: relative; } .bar-fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 4px; background: var(--accent); }
 .bar-row.direct .bar-fill { background: var(--serious); }
 .tip { position: fixed; z-index: 60; pointer-events: none; background: var(--raised-2); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px; box-shadow: var(--shadow-tip); max-width: 380px; font-size: 12px; display: none; }
-.tip .tv { font-size: 14px; font-weight: 650; } .tip .tl { color: var(--text-3); } .tip .tk { display: flex; gap: 8px; align-items: center; margin-top: 3px; } .tip .keyln { width: 12px; height: 3px; border-radius: 2px; flex: none; }
+.tip .tv { font-size: 14px; font-weight: 650; } .tip .tip-l { color: var(--text-3); } .tip .tk { display: flex; gap: 8px; align-items: center; margin-top: 3px; } .tip .keyln { width: 12px; height: 3px; border-radius: 2px; flex: none; }
 .tip .tt { font-family: var(--mono); font-size: 11.5px; color: var(--text-2); word-break: break-all; margin-top: 4px; }
 .cov { display: grid; grid-template-columns: 74px 1fr; gap: 6px 10px; align-items: center; font-size: 11.5px; color: var(--text-3); } .cov .lane { position: relative; height: 14px; border-radius: 4px; background: rgba(12,163,12,.28); overflow: hidden; } .cov .gap { position: absolute; top: 0; bottom: 0; background: repeating-linear-gradient(135deg, var(--critical) 0 4px, #7a2020 4px 8px); }
 
