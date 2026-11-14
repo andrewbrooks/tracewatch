@@ -288,7 +288,12 @@ class _Recording:
         )
         if not _wait_port(port, 60) or not run.p(CA_CERT).exists():
             return self.abort_start("proxy did not come up")
-        self.ev.emit("component_started", component="mitm", pid=self.procs["mitm"].pid, port=port)
+        mitm_pid = self.procs["mitm"].pid
+        self.ev.emit("component_started", component="mitm", pid=mitm_pid, port=port)
+        # Recorded with its start time so a later sweep can stop exactly this process if the recorder dies.
+        self.m["mitm_pid"] = mitm_pid
+        self.m["mitm_start_ticks"] = start_ticks(mitm_pid)
+        run.write_manifest(self.m)
         return None
 
     # ---- stage 2: the target, started but held until the kernel tracer is attached
