@@ -24,6 +24,7 @@ import json
 import re
 import secrets
 from collections import Counter
+from collections.abc import Callable
 from urllib.parse import parse_qsl, quote_plus
 
 SENSITIVE_WORDS = frozenset(
@@ -113,8 +114,12 @@ class Redactor:
         s = _BEARER.sub(lambda m: m.group(1) + self.tag("bearer", m.group(2)), s)
         s = _BASIC.sub(lambda m: m.group(1) + self.tag("basic", m.group(2)), s)
         for kind, rx in _SHAPES:
-            s = rx.sub(lambda m, k=kind: self.tag(k, m.group(0)), s)
+            s = rx.sub(self._tagger(kind), s)
         return self._kv_scan(s)
+
+    def _tagger(self, kind: str) -> Callable[[re.Match[str]], str]:
+        """A replacement function that tags the whole match as `kind`."""
+        return lambda m: self.tag(kind, m.group(0))
 
     def _kv_scan(self, s: str) -> str:
         """Redact the value of every sensitive `name<sep>value`. After a NON-sensitive pair, resume scanning

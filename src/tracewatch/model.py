@@ -16,6 +16,7 @@ import os
 import shlex
 from collections import Counter, defaultdict
 from pathlib import Path
+from typing import Any
 
 from . import __version__
 from . import tracee as tracee_cfg
@@ -190,7 +191,7 @@ class _Attribution:
 class _Kernel:
     """What reading the kernel events produced besides timeline entries."""
 
-    def __init__(self, ca_loads: int, proxy_connects: int, udp_probes: Counter):
+    def __init__(self, ca_loads: int, proxy_connects: int, udp_probes: Counter[Any]):
         self.ca_loads, self.proxy_connects, self.udp_probes = ca_loads, proxy_connects, udp_probes
 
 
@@ -271,7 +272,7 @@ def _kernel_events(
     dns_probe_until: dict[int, int] = {}  # eid -> abs ts until which UDP connects are lookup probes
     ca_loads = 0
     proxy_connects = 0
-    udp_probes = Counter()
+    udp_probes: Counter[Any] = Counter()
     for e in sorted(tr, key=lambda x: x["timestamp"]):
         p = by_eid.get(e["processEntityId"])
         t = e["timestamp"] - t0
@@ -873,7 +874,7 @@ def _destinations(http: list[dict], ev: list[dict], ip_to_name: dict[str, str], 
     return out
 
 
-def _dns(ev: list[dict], resolved: dict, udp_probes: Counter, ip_to_name: dict[str, str]) -> dict:
+def _dns(ev: list[dict], resolved: dict, udp_probes: Counter[Any], ip_to_name: dict[str, str]) -> dict:
     contacts: dict[tuple, dict] = {}
     for e in ev:
         if e["kind"] == "dns" and e["sub"] == "resolver":

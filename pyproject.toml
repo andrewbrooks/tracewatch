@@ -86,10 +86,6 @@ module = [
   "tracewatch.recorder",
   "tracewatch.proxy_addon",
   "tracewatch.tracee",
-  "tracewatch.integrity",
-  "tracewatch.redact",
-  "tracewatch.model",
-  "tracewatch.findings_catalog",
 ]
 ignore_errors = true
 
