@@ -78,15 +78,6 @@ warn_redundant_casts = true
 module = ["brotli"]
 ignore_missing_imports = true
 
-# Baseline: these modules had type errors when mypy was first added (48 in all, mostly attributes
-# reached through an Optional). They are skipped for now so the check can gate new code at once.
-# Remove a module from this list when it is clean; never add one. Modules not listed are fully checked.
-[[tool.mypy.overrides]]
-module = [
-  "tracewatch.recorder",
-]
-ignore_errors = true
-
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]  # integration scripts (tty_test.py, ...) are run by hand, not collected

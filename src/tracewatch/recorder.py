@@ -18,6 +18,8 @@ import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
+from typing import TypedDict
 
 from . import __version__, tracee
 from .clock import stamp
@@ -121,6 +123,13 @@ def preflight() -> list[str]:
     return problems
 
 
+class _StopFlag(TypedDict):
+    """Set by the signal handler: whether a stop was requested, and by which signal."""
+
+    stop: bool
+    sig: int | None
+
+
 class _Recording:
     """One recording in progress. The stages run in a fixed order (proxy, held root, kernel tracing, supervision,
     teardown); a start-up stage returns an exit code if it failed, None if it succeeded."""
@@ -144,7 +153,7 @@ class _Recording:
         self.info_thread.start()  # a docker round-trip nothing waits for until the manifest is rewritten after arming
         self.run.write_manifest(self.m)
         self.ev.emit("run_started")
-        self.flag = {"stop": False, "sig": None}
+        self.flag: _StopFlag = {"stop": False, "sig": None}
         signal.signal(signal.SIGTERM, self._on_signal)
         signal.signal(signal.SIGINT, self._on_signal)
         self.procs: dict[str, subprocess.Popen] = {}
@@ -183,7 +192,7 @@ class _Recording:
             "versions": {"mitmproxy": mv.VERSION, "tracee": {"image": tracee.IMAGE, "pending": True}},
         }
 
-    def _on_signal(self, signum, _frame) -> None:
+    def _on_signal(self, signum: int, _frame: FrameType | None) -> None:
         self.flag["stop"], self.flag["sig"] = True, signum
 
     # ---- things that can happen at any stage
@@ -224,10 +233,17 @@ class _Recording:
         self.run.write_manifest(self.m)
         return EX_RECORDER_FAILED
 
-    def note_caps(self) -> None:
+    def _components(self) -> tuple[tracee.Collector, FileCapture, subprocess.Popen]:
+        """The Tracee collector, the file capture and the target, for stages 4 and 5. run_all runs them only after the
+        start stages succeeded, so all three exist; this fails loudly if that order is ever broken."""
+        if self.collector is None or self.filecap is None or self.root is None:
+            raise RuntimeError("supervise and teardown need the start stages to have succeeded")
+        return self.collector, self.filecap, self.root
+
+    def note_caps(self, collector: tracee.Collector) -> None:
         run, ev, caps_hit = self.run, self.ev, self.caps_hit
         found = [f"proxy:{lv}" for lv in ("soft", "hard") if run.p(f"flags/flows_{lv}_cap").exists()]
-        found += ["tracee:hard"] if self.collector.capped else []
+        found += ["tracee:hard"] if collector.capped else []
         for c in found:
             if c not in caps_hit:
                 caps_hit.append(c)
@@ -343,7 +359,10 @@ class _Recording:
             tap=filecap.tap,
             max_bytes=o.max_tracee_bytes,
         )
-        collector.watch_exit_pid = self.root.pid
+        root = self.root
+        if root is None:
+            raise RuntimeError("start_tracee needs hold_root to have started the target")
+        collector.watch_exit_pid = root.pid
         filecap.start()
         collector.start()
         ev.emit("component_started", component="tracee", container=self.cname, host_pid=hp)
@@ -362,7 +381,8 @@ class _Recording:
 
     # ---- stage 4: watch the target until it exits
     def supervise(self) -> int:
-        run, ev, flag, collector, root, procs = self.run, self.ev, self.flag, self.collector, self.root, self.procs
+        run, ev, flag, procs = self.run, self.ev, self.flag, self.procs
+        collector, _, root = self._components()
         seq, last_hb, last_chk = 0, 0.0, 0.0
         forwarded = False
         self.m["caps_hit"] = self.caps_hit
@@ -370,8 +390,9 @@ class _Recording:
             if flag["stop"] and not forwarded:
                 forwarded = True
                 ev.emit("signal_received", signal=flag["sig"])
-                if flag["sig"] == signal.SIGTERM or not sys.stdin.isatty():
-                    root.send_signal(flag["sig"])  # on a tty, ^C already reached the root directly
+                sig = flag["sig"]
+                if sig is not None and (sig == signal.SIGTERM or not sys.stdin.isatty()):
+                    root.send_signal(sig)  # on a tty, ^C already reached the root directly
             if procs["mitm"].poll() is not None:
                 self.lose("mitm", returncode=procs["mitm"].returncode)
             now = time.monotonic()
@@ -381,7 +402,7 @@ class _Recording:
                     self.lose("tracee", collector_error=collector.error)
                 elif not collector.is_alive():
                     self.lose("tracee-collector", error=collector.error)
-            self.note_caps()
+            self.note_caps(collector)
             if self.kill_deadline and now > self.kill_deadline[0] and root.poll() is None:
                 ev.emit("target_killed", why="did not exit after SIGTERM")
                 root.kill()
@@ -403,15 +424,8 @@ class _Recording:
 
     # ---- stage 5: stop everything and write the final manifest
     def teardown(self, rc: int) -> int:
-        o, run, m, ev, collector, procs, redactor = (
-            self.o,
-            self.run,
-            self.m,
-            self.ev,
-            self.collector,
-            self.procs,
-            self.redactor,
-        )
+        o, run, m, ev, procs, redactor = self.o, self.run, self.m, self.ev, self.procs, self.redactor
+        collector, filecap, _ = self._components()
         lost, cname = self.lost, self.cname
         ev.emit("teardown_started")
         if "tracee" not in lost:
@@ -427,18 +441,18 @@ class _Recording:
         collector.join(timeout=15)
         collector.stop()
         tracee.remove(cname)
-        self.filecap.finish()  # the last look at every file the target wrote, then files.jsonl
+        filecap.finish()  # the last look at every file the target wrote, then files.jsonl
         if procs["mitm"].poll() is None:
             procs["mitm"].terminate()
             try:
                 procs["mitm"].wait(timeout=5)
             except subprocess.TimeoutExpired:
                 procs["mitm"].kill()
-        self.note_caps()
+        self.note_caps(collector)
         summaries = last_records(run.p(FLOWS), {"redaction_summary", "cap_summary"})
         removed = run.remove_ca_private_material()
         ev.emit("ca_private_material_removed", files=removed)
-        m["file_capture"] = self.filecap.summary()
+        m["file_capture"] = filecap.summary()
         m["caps"] = {
             "proxy": summaries.get("cap_summary"),  # None if the proxy was killed before its shutdown hook ran
             "tracee": {
@@ -455,7 +469,7 @@ class _Recording:
             degraded=bool(lost),
             redactions={
                 "recorder": dict(redactor.counts),
-                "file_contents": dict(self.filecap.redactor.counts),
+                "file_contents": dict(filecap.redactor.counts),
                 "tracee_lines_dropped": collector.redaction_failures,
                 "proxy": (summaries.get("redaction_summary") or {}).get("counts"),
             },
