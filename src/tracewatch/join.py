@@ -3,7 +3,11 @@ Inputs: flow/conn records written by the proxy addon, Tracee events (non-probe).
 Per flow it returns: pid (or None), method, scope (in-tree/outside-tree/unknown), candidates."""
 
 import json
+import logging
 import sys
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 WINDOW_NS = 2_000_000_000  # a connect this long before the proxy accepted still counts
 SLACK_NS = 100_000_000  # tolerated clock skew (connect timestamped slightly after accept)
@@ -12,14 +16,28 @@ SEND_NAMES = ("sendto", "sendmsg", "sendmmsg", "write", "writev")  # Tracee sysc
 
 
 def load(path):
-    """Read a JSONL file, skipping lines that do not parse (a kill can truncate the last one)."""
+    """Read a JSONL file, skipping lines that do not parse. A kill can truncate the last line, which is expected;
+    an unparseable line anywhere else means the file is damaged, and is logged (the file name and a count, never the
+    line)."""
     out = []
+    bad = []  # line numbers that did not parse
+    last = 0
     with open(path, "rb") as f:
-        for line in f:
+        for n, line in enumerate(f, 1):
+            last = n
             try:
                 out.append(json.loads(line))
             except ValueError:
-                pass
+                bad.append(n)
+    damaged = [n for n in bad if n != last]
+    if damaged:
+        logger.warning(
+            "%s: skipped %d unparseable line(s) that are not just a truncated last line; the data may be incomplete",
+            Path(path).name,
+            len(damaged),
+        )
+    elif bad:
+        logger.debug("%s: skipped a truncated last line", Path(path).name)
     return out
 
 

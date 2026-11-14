@@ -4,14 +4,16 @@ import argparse
 import sys
 from pathlib import Path
 
+from .log import configure as configure_logging
 from .recorder import Options, record
-from .sweep import sweep
+from .sweep import sweep_runs
 
 DEFAULT_RUNS = "out/runs"
 
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="tracewatch", description="Flight recorder for a launched process.")
+    p.add_argument("-v", "--verbose", action="store_true", help="also show debug diagnostics on stderr")
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("record", help="run a command under the recorder; recording ends when it exits")
     r.add_argument("--out", default=DEFAULT_RUNS, help=f"runs directory (default {DEFAULT_RUNS})")
@@ -55,7 +57,9 @@ def main(argv: list[str] | None = None) -> int:
     df.add_argument("-o", "--output", help="output file (default: stdout)")
     s = sub.add_parser("sweep", help="finalize runs whose recorder died, remove leaked containers/proxies")
     s.add_argument("--out", default=DEFAULT_RUNS)
+    s.add_argument("--dry-run", action="store_true", help="say what would be swept and changed, without changing it")
     a = p.parse_args(argv)
+    configure_logging(a.verbose)
     if a.cmd == "report":
         return _report(a)
     if a.cmd == "diff":
@@ -86,9 +90,14 @@ def main(argv: list[str] | None = None) -> int:
                 print("  data after the last heartbeat is untrusted (the recorder was dead)")
         return EXIT_CODES[res["verdict"]]
     if a.cmd == "sweep":
-        n = sweep(Path(a.out))
-        print(f"swept {len(n)} run(s)")
-        return 0
+        report = sweep_runs(Path(a.out), dry_run=a.dry_run)
+        print(f"{'would sweep' if a.dry_run else 'swept'} {len(report.swept)} run(s)")
+        if report.problems:  # each one was already logged as a warning, with its run
+            print(
+                f"tracewatch: {len(report.problems)} problem(s) during the sweep (see the warnings above)",
+                file=sys.stderr,
+            )
+        return 1 if report.problems else 0
     cmd = a.argv[1:] if a.argv and a.argv[0] == "--" else a.argv
     if not cmd:
         p.error("record needs a command after --")

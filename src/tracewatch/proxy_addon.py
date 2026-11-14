@@ -24,6 +24,7 @@ Configuration comes from the environment (set by the recorder): TW_FLOWS (output
 
 import glob
 import json
+import logging
 import os
 import time
 import zlib
@@ -32,6 +33,8 @@ from collections import Counter
 from mitmproxy import http
 
 from tracewatch.redact import PROCESS_CAP, Redactor
+
+logger = logging.getLogger("tracewatch.proxy_addon")
 
 BODY_CAP = int(os.environ.get("TW_BODY_CAP") or 8192)  # stored characters per body, after redaction
 SOFT_CAP = int(os.environ.get("TW_SOFT_FLOWS_BYTES") or 0) or None  # past this, bodies are no longer stored
@@ -57,8 +60,8 @@ def _flag(name: str) -> None:
     if FLAGS_DIR:
         try:
             open(os.path.join(FLAGS_DIR, name), "w").close()
-        except OSError:
-            pass
+        except OSError as e:
+            logger.warning("could not write the %s flag (%s); the recorder will not see it", name, type(e).__name__)
 
 
 def _raw_write(rec: dict) -> int:
@@ -118,6 +121,9 @@ def _emit(kind: str, build) -> None:
     try:
         rec = build()
     except Exception as e:
+        logger.warning(
+            "redaction failed while recording a %s record (%s); its content was dropped", kind, type(e).__name__
+        )
         rec = {"kind": "redaction_failed", "while_recording": kind, "error": type(e).__name__}
     _write(rec)
 
@@ -174,6 +180,8 @@ def _decode(raw: bytes, encoding: str) -> bytes:
     except ValueError:
         raise
     except Exception as e:
+        # Deliberately broad: brotli, zstd and zlib each raise their own error types for corrupt input, and any of
+        # them means "cannot decode this body". The caller records it as undecodable, never as a crash.
         raise ValueError(f"undecodable ({type(e).__name__})") from e
     raise ValueError(f"content-encoding {enc!r} not decodable for capture")
 
@@ -220,7 +228,7 @@ def _inode(sport: int, pport: int):
         try:
             rows = open(fn).read().splitlines()[1:]
         except OSError:
-            continue
+            continue  # /proc/net/tcp6 is absent without IPv6; try the next file
         for r in rows:
             p = r.split()
             if int(p[1].rsplit(":", 1)[1], 16) == sport and int(p[2].rsplit(":", 1)[1], 16) == pport and p[9] != "0":
@@ -239,7 +247,7 @@ def _holders(inode: str):
                 if os.readlink(f"{d}/{fd}") == want:
                     fds.setdefault(int(d.split("/")[2]), []).append(int(fd))
         except OSError:
-            continue
+            continue  # processes exit or deny access while we scan /proc; skipping one is expected
     return sorted(fds), n, fds
 
 

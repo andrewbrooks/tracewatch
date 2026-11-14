@@ -27,6 +27,7 @@ import ctypes
 import ctypes.util
 import hashlib
 import json
+import logging
 import os
 import re
 import select
@@ -36,8 +37,11 @@ import threading
 import time
 from pathlib import Path
 
+from .log import log_unexpected
 from .model import decode_open_flags
 from .redact import Redactor
+
+logger = logging.getLogger(__name__)
 
 FILES = "files.jsonl"
 CAP_FILE = 16 * 1024  # stored bytes per file
@@ -178,12 +182,18 @@ class TempWatcher(threading.Thread):
             self._libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
             self.fd = self._libc.inotify_init1(os.O_CLOEXEC | os.O_NONBLOCK)
             if self.fd < 0:
+                logger.warning(
+                    "file capture: the file watcher could not start (%s); files the target writes and removes "
+                    "quickly may be missed",
+                    os.strerror(ctypes.get_errno()),
+                )
                 return
             self.available = True
             for root in self.roots:
                 if os.path.isdir(root):
                     self._add(root)
-        except Exception:
+        except Exception as e:
+            log_unexpected(logger, "file watcher setup", e)
             return
         finally:
             self.ready.set()
@@ -195,7 +205,7 @@ class TempWatcher(threading.Thread):
                 try:
                     chunk = os.read(self.fd, 1 << 16)
                 except BlockingIOError:
-                    continue
+                    continue  # the descriptor is non-blocking: nothing to read right now is normal
                 self._handle(chunk)
         finally:
             os.close(self.fd)
@@ -237,7 +247,7 @@ class TempWatcher(threading.Thread):
                 elif e.is_file(follow_symlinks=False):
                     self._remember(e.path)
             except OSError:
-                continue
+                continue  # an entry can vanish or be unreadable while we scan; skipping it is expected
 
     def _remember(self, path: str) -> None:
         info = read_regular(path)
@@ -321,6 +331,7 @@ class FileCapture(threading.Thread):
                     self.wake.set()
         except Exception as ex:  # the collector must never be hurt by this
             self.error = repr(ex)
+            log_unexpected(logger, "file capture event handling", ex)
 
     def _wanted(self, path: str) -> bool:
         return bool(path) and path.startswith("/") and not path.startswith(self.skip) and len(path) < 4096
@@ -343,6 +354,7 @@ class FileCapture(threading.Thread):
                     last_write = time.monotonic()
             except Exception as ex:
                 self.error = repr(ex)
+                log_unexpected(logger, "file capture pass", ex)
 
     def finish(self) -> None:
         """Stop, look at every followed file one last time, and write files.jsonl."""
@@ -355,6 +367,7 @@ class FileCapture(threading.Thread):
             self._write()
         except Exception as ex:
             self.error = repr(ex)
+            log_unexpected(logger, "file capture final pass", ex)
         self.watcher.stop()
 
     def _pass(self, final: bool) -> None:
