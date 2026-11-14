@@ -29,6 +29,7 @@ import os
 import time
 import zlib
 from collections import Counter
+from typing import Any, TypedDict
 
 from mitmproxy import http
 
@@ -50,7 +51,17 @@ _fd = None
 _written = 0
 _dropped: Counter = Counter()
 _hit = {"soft": False, "hard": False}
-_streams: dict = {}
+
+
+class _StreamState(TypedDict):
+    """The bounded copy of one streamed response."""
+
+    buf: bytearray
+    size: int  # bytes seen, including those past the cap
+    over: bool  # the cap was exceeded and the copy was dropped
+
+
+_streams: dict[str, _StreamState] = {}
 _ws: dict = {}  # flow_id -> per-connection websocket state
 _red = Redactor(bytes.fromhex(os.environ["TW_REDACT_KEY"])) if os.environ.get("TW_REDACT_KEY") else Redactor()
 
@@ -166,7 +177,7 @@ def _decode(raw: bytes, encoding: str) -> bytes:
             return out
         if enc == "zstd":
             try:
-                from compression import zstd  # Python 3.14+
+                from compression import zstd  # type: ignore[import-not-found]  # Python 3.14+
             except ImportError:
                 from backports import zstd  # Python < 3.14
 
@@ -207,7 +218,7 @@ def _body_record(headers, size: int, raw: bytes | None) -> dict:
 def _msg(msg) -> dict:
     """Headers + body for a fully buffered message (requests)."""
     ct = msg.headers.get("content-type", "")
-    out = {"headers": _red.headers(msg.headers.items(multi=True))}
+    out: dict[str, Any] = {"headers": _red.headers(msg.headers.items(multi=True))}
     if msg.stream:  # mitmproxy streamed it past stream_large_bodies; we never saw the bytes
         cl = msg.headers.get("content-length", "")
         out["body"] = {
@@ -239,7 +250,8 @@ def _inode(sport: int, pport: int):
 def _holders(inode: str):
     """-> (sorted holder pids, processes scanned, {pid: [fd numbers]}): the fds let the join match a process's
     send()/write() on descriptor N to this connection."""
-    want, fds, n = f"socket:[{inode}]", {}, 0
+    fds: dict[int, list[int]] = {}
+    want, n = f"socket:[{inode}]", 0
     for d in glob.glob("/proc/[0-9]*/fd"):
         n += 1
         try:
@@ -337,9 +349,12 @@ def request(flow: http.HTTPFlow) -> None:
 
 def responseheaders(flow: http.HTTPFlow) -> None:
     """Stream every response: forward each chunk immediately, keep a bounded copy for the record."""
-    if flow.response.status_code == 101:  # websocket upgrade: no body; the connection continues as websocket_*
+    response = flow.response
+    if response is None:  # mitmproxy calls this hook only once the response headers exist
         return
-    st = {"buf": bytearray(), "size": 0, "over": False}
+    if response.status_code == 101:  # websocket upgrade: no body; the connection continues as websocket_*
+        return
+    st: _StreamState = {"buf": bytearray(), "size": 0, "over": False}
     _streams[flow.id] = st
 
     def tee(chunk: bytes) -> bytes:
@@ -352,7 +367,7 @@ def responseheaders(flow: http.HTTPFlow) -> None:
                 st["buf"].extend(chunk)
         return chunk
 
-    flow.response.stream = tee
+    response.stream = tee
 
 
 def _timing(flow: http.HTTPFlow) -> dict:
@@ -514,7 +529,10 @@ def _ws_body(msg, st: dict) -> dict:
 
 
 def websocket_message(flow: http.HTTPFlow) -> None:
-    msg = flow.websocket.messages[-1]
+    websocket = flow.websocket
+    if websocket is None:  # mitmproxy calls this hook only for websocket flows
+        return
+    msg = websocket.messages[-1]
     st = _ws_state(flow)
     d = "c2s" if msg.from_client else "s2c"
     seq = st["seq"]
