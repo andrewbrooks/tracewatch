@@ -241,4 +241,4 @@ def test_sweep_command_exits_nonzero_when_something_could_not_be_cleaned_up(tmp_
     monkeypatch.setattr(sweep_mod, "_list_containers", lambda run_id: ([], "could not run docker (FileNotFoundError)"))
     assert main(["sweep", "--out", str(tmp_path)]) == 1
     captured = capsys.readouterr()
-    assert "swept 1 run(s)" in captured.out and "problem:" in captured.err
+    assert "swept 1 run(s)" in captured.out and "1 problem(s) during the sweep" in captured.err

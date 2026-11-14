@@ -38,7 +38,7 @@ def _list_containers(run_id: str) -> tuple[list[str], str | None]:
     except (OSError, subprocess.SubprocessError) as e:
         return [], f"could not run docker ({type(e).__name__})"
     if r.returncode != 0:
-        return [], f"docker ps failed: {_first_line(r.stderr)}"
+        return [], f"docker ps failed: {_first_line(r.stderr or r.stdout)}"
     return r.stdout.split(), None
 
 
@@ -50,7 +50,7 @@ def _remove_container(container_id: str) -> str | None:
         )
     except (OSError, subprocess.SubprocessError) as e:
         return f"could not run docker ({type(e).__name__})"
-    return None if r.returncode == 0 else f"docker rm {container_id[:12]} failed: {_first_line(r.stderr)}"
+    return None if r.returncode == 0 else f"docker rm {container_id[:12]} failed: {_first_line(r.stderr or r.stdout)}"
 
 
 def _first_line(text: str) -> str:

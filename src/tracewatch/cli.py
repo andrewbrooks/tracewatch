@@ -92,8 +92,11 @@ def main(argv: list[str] | None = None) -> int:
     if a.cmd == "sweep":
         report = sweep_runs(Path(a.out), dry_run=a.dry_run)
         print(f"{'would sweep' if a.dry_run else 'swept'} {len(report.swept)} run(s)")
-        for problem in report.problems:
-            print(f"tracewatch: problem: {problem}", file=sys.stderr)
+        if report.problems:  # each one was already logged as a warning, with its run
+            print(
+                f"tracewatch: {len(report.problems)} problem(s) during the sweep (see the warnings above)",
+                file=sys.stderr,
+            )
         return 1 if report.problems else 0
     cmd = a.argv[1:] if a.argv and a.argv[0] == "--" else a.argv
     if not cmd:
