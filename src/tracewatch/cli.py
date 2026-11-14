@@ -4,6 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from .log import configure as configure_logging
 from .recorder import Options, record
 from .sweep import sweep
 
@@ -12,6 +13,7 @@ DEFAULT_RUNS = "out/runs"
 
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="tracewatch", description="Flight recorder for a launched process.")
+    p.add_argument("-v", "--verbose", action="store_true", help="also show debug diagnostics on stderr")
     sub = p.add_subparsers(dest="cmd", required=True)
     r = sub.add_parser("record", help="run a command under the recorder; recording ends when it exits")
     r.add_argument("--out", default=DEFAULT_RUNS, help=f"runs directory (default {DEFAULT_RUNS})")
@@ -56,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("sweep", help="finalize runs whose recorder died, remove leaked containers/proxies")
     s.add_argument("--out", default=DEFAULT_RUNS)
     a = p.parse_args(argv)
+    configure_logging(a.verbose)
     if a.cmd == "report":
         return _report(a)
     if a.cmd == "diff":
