@@ -7,6 +7,7 @@ import logging
 import os
 import signal
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -101,7 +102,7 @@ def _kill(pid: int) -> str | None:
 
 
 # ---- the sweep ------------------------------------------------------------------------------------------------
-def sweep_runs(runs_root: Path, log=print, *, dry_run: bool = False) -> SweepReport:
+def sweep_runs(runs_root: Path, log: Callable[[str], object] = print, *, dry_run: bool = False) -> SweepReport:
     """Mark dead-recorder runs `aborted`, remove their labelled containers and their orphan proxy, and delete the
     CA private key. A run is dead if its recorder's pid is gone or was recycled (start time differs).
     With dry_run nothing is changed: `log` says what would be done."""
@@ -128,7 +129,7 @@ def sweep_runs(runs_root: Path, log=print, *, dry_run: bool = False) -> SweepRep
     return report
 
 
-def _sweep_one(run: RunDir, m: dict, log, dry_run: bool, report: SweepReport) -> None:
+def _sweep_one(run: RunDir, m: dict, log: Callable[[str], object], dry_run: bool, report: SweepReport) -> None:
     problems: list[str] = []
     ids, err = _list_containers(run.run_id)
     if err:
@@ -190,6 +191,6 @@ def _sweep_one(run: RunDir, m: dict, log, dry_run: bool, report: SweepReport) ->
     log(f"tracewatch: swept dead run {run.run_id} (removed {removed} container(s))")
 
 
-def sweep(runs_root: Path, log=print) -> list[str]:
+def sweep(runs_root: Path, log: Callable[[str], object] = print) -> list[str]:
     """Sweep and return the ids of the runs that were finalized."""
     return sweep_runs(runs_root, log).swept

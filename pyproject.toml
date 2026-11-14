@@ -70,6 +70,9 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.12"
 files = ["src"]
+# Every function is annotated and its body is checked. Keep it that way: add types to new code, do not loosen these.
+disallow_untyped_defs = true
+check_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 

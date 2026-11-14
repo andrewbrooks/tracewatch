@@ -123,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
 
-def _diff(a) -> int:
+def _diff(a: argparse.Namespace) -> int:
     import json
 
     from .diff import compare, render_md
@@ -152,7 +152,7 @@ def _diff(a) -> int:
     return 1 if res["changed"] else 0
 
 
-def _report(a) -> int:
+def _report(a: argparse.Namespace) -> int:
     import json
 
     from .model import build

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 
 from .plural import pl
 
@@ -18,7 +19,7 @@ VERDICT_MARK = {
 }
 
 
-def code(s, limit: int = 160) -> str:
+def code(s: object, limit: int = 160) -> str:
     """An untrusted string as an inline code span: control characters removed, newlines flattened, pipes escaped,
     delimiter longer than any backtick run inside."""
     t = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", str(s if s is not None else "")).replace("\n", " ⏎ ").replace("\t", " ")
@@ -30,7 +31,7 @@ def code(s, limit: int = 160) -> str:
     return (d + pad + t.replace("|", "\\|") + pad + d) if t else "—"
 
 
-def txt(s) -> str:
+def txt(s: object) -> str:
     """Untrusted prose in a table cell: no markup, no HTML, no pipes."""
     t = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", str(s if s is not None else "")).replace("\n", " ")
     return re.sub(r"([\\`*_{}\[\]<>|#])", r"\\\1", t)
@@ -42,7 +43,7 @@ def ts(ns: int | None) -> str:
     return f"+{ns / 1e9:.3f}s"
 
 
-def size(n) -> str:
+def size(n: int | None) -> str:
     if n is None:
         return "—"
     for unit, div in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
@@ -59,11 +60,11 @@ def table(head: list[str], rows: list[list[str]]) -> str:
     return "\n".join(out) + "\n"
 
 
-def _namer(m: dict):
+def _namer(m: dict) -> Callable[[str | None], str]:
     """pid-label lookup for a model: "name (pid)", or "unattributed"."""
     procs = {p["id"]: p for p in m["processes"]}
 
-    def pname(pid):
+    def pname(pid: str | None) -> str:
         return f"{procs[pid]['name']} ({procs[pid]['pid']})" if pid in procs else "unattributed"
 
     return pname

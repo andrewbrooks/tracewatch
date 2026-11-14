@@ -29,9 +29,12 @@ import os
 import time
 import zlib
 from collections import Counter
+from collections.abc import Callable
 from typing import Any, TypedDict
 
-from mitmproxy import http
+from mitmproxy import connection, http, tls
+from mitmproxy.proxy import server_hooks
+from mitmproxy.websocket import WebSocketMessage
 
 from tracewatch.redact import PROCESS_CAP, Redactor
 
@@ -127,7 +130,7 @@ def _bodies_allowed() -> bool:
     return True
 
 
-def _emit(kind: str, build) -> None:
+def _emit(kind: str, build: Callable[[], dict]) -> None:
     """Build the (redacted) record, then write it. If redaction raises, the content is dropped, not written."""
     try:
         rec = build()
@@ -197,7 +200,7 @@ def _decode(raw: bytes, encoding: str) -> bytes:
     raise ValueError(f"content-encoding {enc!r} not decodable for capture")
 
 
-def _body_record(headers, size: int, raw: bytes | None) -> dict:
+def _body_record(headers: http.Headers, size: int, raw: bytes | None) -> dict:
     """Captured-body record for a message whose (wire) size is `size` and whose bytes are `raw` (None when
     they were not kept). Never stores anything that was not redacted first."""
     ct = headers.get("content-type", "")
@@ -215,7 +218,7 @@ def _body_record(headers, size: int, raw: bytes | None) -> dict:
         return {"size": size, "content_type": ct or None, "captured": False, "reason": str(e)}
 
 
-def _msg(msg) -> dict:
+def _msg(msg: http.Message) -> dict:
     """Headers + body for a fully buffered message (requests)."""
     ct = msg.headers.get("content-type", "")
     out: dict[str, Any] = {"headers": _red.headers(msg.headers.items(multi=True))}
@@ -234,7 +237,7 @@ def _msg(msg) -> dict:
 
 
 # ---- hooks ---------------------------------------------------------------------------------------------
-def _inode(sport: int, pport: int):
+def _inode(sport: int, pport: int) -> str | None:
     for fn in ("/proc/net/tcp", "/proc/net/tcp6"):
         try:
             rows = open(fn).read().splitlines()[1:]
@@ -247,7 +250,7 @@ def _inode(sport: int, pport: int):
     return None
 
 
-def _holders(inode: str):
+def _holders(inode: str) -> tuple[list[int], int, dict[int, list[int]]]:
     """-> (sorted holder pids, processes scanned, {pid: [fd numbers]}): the fds let the join match a process's
     send()/write() on descriptor N to this connection."""
     fds: dict[int, list[int]] = {}
@@ -267,7 +270,7 @@ _conn_state: dict[str, dict] = {}  # conn_id -> {"inode", "pids", "scans"}: a co
 MAX_RESCANS = 8  # per connection: each scan blocks the proxy loop for as long as the accept-time one does
 
 
-def client_connected(client) -> None:
+def client_connected(client: connection.Client) -> None:
     t0 = time.perf_counter()
     sport, pport = client.peername[1], client.sockname[1]
     inode = None
@@ -386,50 +389,57 @@ def _timing(flow: http.HTTPFlow) -> dict:
 
 def response(flow: http.HTTPFlow) -> None:
     st = _streams.pop(flow.id, None)
+    resp = flow.response
+    if resp is None:  # mitmproxy calls this hook only once the response exists
+        return
 
-    def build():
+    def build() -> dict:
         rec = {
             "kind": "flow_result",
             "flow_id": flow.id,
-            "status": flow.response.status_code,
-            "headers": _red.headers(flow.response.headers.items(multi=True)),
+            "status": resp.status_code,
+            "headers": _red.headers(resp.headers.items(multi=True)),
             **_timing(flow),
         }
         if st is None:
-            rec.update(_msg(flow.response))
+            rec.update(_msg(resp))
         else:
-            rec["body"] = _body_record(flow.response.headers, st["size"], None if st["over"] else bytes(st["buf"]))
+            rec["body"] = _body_record(resp.headers, st["size"], None if st["over"] else bytes(st["buf"]))
         return rec
 
     _emit("flow_result", build)
 
 
-def server_connected(data) -> None:
+def server_connected(data: server_hooks.ServerConnectionHookData) -> None:
     """The proxy opened an upstream connection: this is the DNS answer for the name the client asked for."""
     srv = data.server
+    address = srv.address
+    if address is None:  # a connected upstream always has one
+        return
     peer = srv.peername
     _emit(
         "resolve",
         lambda: {
             "kind": "resolve",
             "conn_id": data.client.id,
-            "name": _red.text(str(srv.address[0])),
-            "port": srv.address[1],
+            "name": _red.text(str(address[0])),
+            "port": address[1],
             "ip": peer[0] if peer else None,
         },
     )
 
 
-def _tls_failed(side: str):
-    def hook(data) -> None:
+def _tls_failed(side: str) -> Callable[[tls.TlsData], None]:
+    def hook(data: tls.TlsData) -> None:
         c = data.conn
+        address = getattr(c, "address", None)  # clients and servers both have one; the base Connection type does not
         _emit(
             "tls_failed",
             lambda: {
                 "kind": "tls_failed",
                 "side": side,
                 "conn_id": data.context.client.id,
-                "sni": _red.text(str(c.sni or c.address[0] if c.address else c.sni or "")),
+                "sni": _red.text(str(c.sni or address[0] if address else c.sni or "")),
                 "error": _red.text(str(c.error or ""))[:300],
             },
         )
@@ -439,7 +449,7 @@ def _tls_failed(side: str):
 
 # Clients that pin certificates (or do not trust the per-run CA) abort the handshake: without this record the report
 # would show a bare CONNECT and nothing about WHY no request was recorded.
-def tls_established_client(data) -> None:
+def tls_established_client(data: tls.TlsData) -> None:
     """The client completed the handshake with the recorder's certificate. If no request follows, the report says so:
     a pin checked AFTER the handshake (curl --pinnedpubkey) looks exactly like this."""
     _emit(
@@ -452,9 +462,13 @@ tls_failed_client = _tls_failed("client")
 tls_failed_server = _tls_failed("server")
 
 
-def tls_established_server(data) -> None:
+def tls_established_server(data: tls.TlsData) -> None:
     """Upstream TLS facts (version, cipher, ALPN, certificate subject/issuer/expiry)."""
     c = data.conn
+    address = getattr(c, "address", None)  # the base Connection type has no address; an upstream always does
+    if address is None:  # this hook fires only for a connected upstream
+        return
+    host = address[0]
 
     def build() -> dict:
         cert = c.certificate_list[0] if c.certificate_list else None
@@ -462,7 +476,7 @@ def tls_established_server(data) -> None:
         return {
             "kind": "tls",
             "conn_id": data.context.client.id,
-            "host": _red.text(str(c.address[0])),
+            "host": _red.text(str(host)),
             "sni": c.sni,
             "version": c.tls_version,
             "cipher": c.cipher,
@@ -481,7 +495,7 @@ def tls_established_server(data) -> None:
     _emit("tls", build)
 
 
-def _ws_state(flow) -> dict:
+def _ws_state(flow: http.HTTPFlow) -> dict:
     return _ws.setdefault(
         flow.id,
         {
@@ -511,7 +525,7 @@ def websocket_start(flow: http.HTTPFlow) -> None:
     )
 
 
-def _ws_body(msg, st: dict) -> dict:
+def _ws_body(msg: WebSocketMessage, st: dict) -> dict:
     size = len(msg.content)
     if not msg.is_text:
         return {"size": size, "captured": False, "reason": "binary"}

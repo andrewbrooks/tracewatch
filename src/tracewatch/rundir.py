@@ -7,6 +7,7 @@ import os
 import secrets
 import time
 from pathlib import Path
+from typing import Any
 
 from .clock import stamp
 
@@ -28,7 +29,7 @@ class EventLog:
     def __init__(self, path: Path):
         self.fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
 
-    def emit(self, kind: str, **kw) -> None:
+    def emit(self, kind: str, **kw: Any) -> None:
         rec = {**stamp(), "kind": kind, **kw}
         os.write(self.fd, (json.dumps(rec, separators=(",", ":")) + "\n").encode())
         os.fsync(self.fd)

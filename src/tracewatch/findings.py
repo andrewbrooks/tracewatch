@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 
 from .findings_catalog import CATALOG
 from .plural import pl
@@ -128,9 +129,9 @@ class _Rules:
         title: str,
         why: str,
         evidence: list[str],
-        extra_procs=(),
-        detail="",
-    ):
+        extra_procs: Iterable[str | None] = (),
+        detail: str = "",
+    ) -> None:
         ev_by_id = self.ev_by_id
         procs_ = []
         for eid in evidence:
@@ -476,7 +477,10 @@ class _Rules:
         cap = self.cap
         execs = self.execs
         for x in cap("masquerade", [x for x in execs if _masquerade(x["detail"])]):
-            why, sev = _masquerade(x["detail"])
+            hit = _masquerade(x["detail"])
+            if hit is None:  # the list above kept only the execs that match
+                continue
+            why, sev = hit
             add("masquerade", sev, "evasion", f"{name_of(x['proc'])} pretends to be something else", why_of("masquerade") + " " + why,
                 [x["id"]], detail=cmd_of(x)[:200])  # fmt: skip
 
@@ -621,7 +625,7 @@ def find(model: dict) -> list[dict]:
     return r.result()
 
 
-def _masquerade(d: dict):
+def _masquerade(d: dict) -> tuple[str, str] | None:
     """(explanation, severity) when this exec looks like a program posing as another, else None."""
     argv, exe = d.get("argv") or [], d.get("exe") or ""
     if not argv or not exe:

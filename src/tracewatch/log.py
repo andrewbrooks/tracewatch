@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import sys
+from typing import TextIO
 
 ROOT = "tracewatch"
 _FORMAT = "tracewatch: %(levelname)s: %(message)s"
@@ -33,7 +34,7 @@ class _StderrHandler(logging.StreamHandler):
         logging.Handler.__init__(self)
 
     @property
-    def stream(self):
+    def stream(self) -> TextIO:
         return sys.stderr
 
 

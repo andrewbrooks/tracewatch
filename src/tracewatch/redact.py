@@ -24,7 +24,8 @@ import json
 import re
 import secrets
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from typing import Any
 from urllib.parse import parse_qsl, quote_plus
 
 SENSITIVE_WORDS = frozenset(
@@ -167,7 +168,7 @@ class Redactor:
         k, eq, v = pair.strip().partition("=")
         return f"{k}{eq}{self.tag('cookie', v)}" if eq and v else pair.strip()
 
-    def headers(self, items) -> list[list[str]]:
+    def headers(self, items: Iterable[tuple[str, str]]) -> list[list[str]]:
         return [[k, self.header(k, v)] for k, v in items]
 
     def url(self, u: str) -> str:
@@ -181,7 +182,7 @@ class Redactor:
             u = base + q + "&".join(parts) + h + frag
         return self.text(u)
 
-    def json_value(self, obj, key: str | None = None):
+    def json_value(self, obj: Any, key: str | None = None) -> Any:
         """Structure-aware: a sensitive key redacts its STRING value (numbers/bools/null are not secrets)."""
         if isinstance(obj, dict):
             return {k: self.json_value(v, k) for k, v in obj.items()}
@@ -233,7 +234,7 @@ class Redactor:
             )
         return self.text(text)
 
-    def body(self, content_type: str, raw_size: int, get_text, cap: int) -> dict:
+    def body(self, content_type: str, raw_size: int, get_text: Callable[[], str], cap: int) -> dict:
         """Capture record for a message body. Redact FIRST, truncate AFTER, so a cut can never expose a
         prefix of a raw secret. Non-text and oversized bodies are described, never stored."""
         out = {"size": raw_size, "content_type": content_type or None}

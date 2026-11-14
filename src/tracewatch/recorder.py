@@ -16,10 +16,11 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from types import FrameType
-from typing import TypedDict
+from typing import Any, TypedDict
 
 from . import __version__, tracee
 from .clock import stamp
@@ -134,7 +135,7 @@ class _Recording:
     """One recording in progress. The stages run in a fixed order (proxy, held root, kernel tracing, supervision,
     teardown); a start-up stage returns an exit code if it failed, None if it succeeded."""
 
-    def __init__(self, o: Options, say):
+    def __init__(self, o: Options, say: Callable[[str], object]) -> None:
         self.o, self.say = o, say
         os.umask(0o077)  # run directories hold captured traffic: every file we or our children create is private
         # ABSOLUTE paths only: the CA bundle and every proxy variable handed to the target point inside the run
@@ -207,7 +208,7 @@ class _Recording:
         root.send_signal(signal.SIGTERM)
         self.kill_deadline.append(time.monotonic() + self.o.kill_grace_s)
 
-    def lose(self, component: str, **kw) -> None:
+    def lose(self, component: str, **kw: Any) -> None:
         if component not in self.lost:
             self.lost.append(component)
             self.m["degraded"] = True

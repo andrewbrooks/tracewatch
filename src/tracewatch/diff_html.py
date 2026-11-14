@@ -140,12 +140,12 @@ def _tokens() -> str:
     return dark + "\n@media (prefers-color-scheme: light) {\n" + light + "\n}\n"
 
 
-def esc(s) -> str:
+def esc(s: object) -> str:
     t = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", str(s if s is not None else ""))
     return html.escape(t, quote=True)
 
 
-def _short(v) -> str:
+def _short(v: object) -> str:
     return esc(v if not isinstance(v, (list, dict)) else str(v))
 
 

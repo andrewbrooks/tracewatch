@@ -8,6 +8,7 @@ import os
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .log import log_unexpected
@@ -174,11 +175,11 @@ class Collector(threading.Thread):
         tracee_args: list[str],
         out: Path,
         err: Path,
-        transform=None,
+        transform: Callable[[bytes], bytes] | None = None,
         max_bytes: int | None = None,
-        keep=None,
-        tap=None,
-    ):
+        keep: Callable[[bytes], bool] | None = None,
+        tap: Callable[[bytes], None] | None = None,
+    ) -> None:
         super().__init__(daemon=True, name="tracee-collector")
         self.run_id, self.container, self.tracee_args = run_id, container, tracee_args
         self.out, self.err = out, err

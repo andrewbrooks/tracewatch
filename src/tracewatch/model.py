@@ -139,12 +139,12 @@ class _Timeline:
         self.events: list[dict] = []
         self._last_resolver: dict[tuple, dict] = {}
 
-    def add(self, t: int, kind: str, proc: dict | None, title: str, sub: str | None = None, **detail) -> dict:
+    def add(self, t: int, kind: str, proc: dict | None, title: str, sub: str | None = None, **detail: Any) -> dict:
         e = {"t": t, "kind": kind, "sub": sub, "proc": proc["id"] if proc else None, "title": title, "detail": detail}
         self.events.append(e)
         return e
 
-    def add_resolver(self, t: int, proc: dict | None, resolver: str, title: str, **detail) -> None:
+    def add_resolver(self, t: int, proc: dict | None, resolver: str, title: str, **detail: Any) -> None:
         """glibc makes several socket calls per lookup; contacts with the same resolver by the same process within
         50 ms are ONE event with a count, so the log shows the lookup once, not as an echo."""
         key = (proc["id"] if proc else None, resolver)
@@ -816,7 +816,7 @@ def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict
 def _destinations(http: list[dict], ev: list[dict], ip_to_name: dict[str, str], procs: list[dict]) -> list[dict]:
     d: dict[tuple, dict] = {}
 
-    def slot(key: tuple, **init) -> dict:
+    def slot(key: tuple, **init: Any) -> dict:
         return d.setdefault(
             key,
             {
