@@ -63,7 +63,7 @@ _BASE = [
 
 def image_info() -> dict:
     """Digest and reported version of the Tracee image actually used (provenance for the manifest)."""
-    info = {"image": IMAGE}
+    info: dict[str, str | None] = {"image": IMAGE}
     r = subprocess.run(
         ["docker", "image", "inspect", IMAGE, "--format", "{{index .RepoDigests 0}}"], capture_output=True, text=True
     )
@@ -226,6 +226,8 @@ class Collector(threading.Thread):
             )
             fd = os.open(self.out, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             last_sync = time.monotonic()
+            if self.proc.stdout is None:  # stdout=PIPE above, so this only guards the invariant
+                raise RuntimeError("the Tracee client was started without a stdout pipe")
             for line in iter(self.proc.stdout.readline, b""):
                 data = line if line.endswith(b"\n") else line + b"\n"
                 if self.watch_exit_pid is not None and self.exit_seen_at is None and self._is_exit(data):
@@ -269,7 +271,10 @@ class Collector(threading.Thread):
             log_unexpected(logger, "tracee collector", e)
 
     def _is_exit(self, line: bytes) -> bool:
-        return b'"eventName":"sched_process_exit"' in line and b'"processId":%d,' % self.watch_exit_pid in line
+        pid = self.watch_exit_pid
+        if pid is None:
+            return False
+        return b'"eventName":"sched_process_exit"' in line and b'"processId":%d,' % pid in line
 
     def stop(self) -> None:
         if self.proc and self.proc.poll() is None:
