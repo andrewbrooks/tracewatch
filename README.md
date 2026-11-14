@@ -104,10 +104,14 @@ are flagged, but their content is not recorded.
 ## Development
 
 ```
-uv sync
-.venv/bin/ruff check . && .venv/bin/ruff format --check .
-.venv/bin/pytest -q                 # unit tests, no Docker needed
+make setup                          # uv sync --locked, and enables the pre-commit hook
+make check                          # ruff, mypy and the unit tests (no Docker needed)
+make help                           # every task, including format, secrets, audit-deps and build
 ```
+
+The pre-commit hook scans staged changes for secrets (gitleaks) and checks lint and formatting. The redaction tests hold
+fake credentials on purpose; `.gitleaks.toml` allows them by file path, so a secret-shaped string anywhere else is
+flagged. CI runs the same checks plus type checking, a dependency audit and the browser suite.
 
 Integration tests (`tests/integration/*.sh`) record real processes and need Docker and the Tracee image.
 The browser tests (`tests/browser/run.py`; run `uv run playwright install chromium` first, `TW_BROWSER=firefox` for
