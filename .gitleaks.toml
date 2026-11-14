@@ -1,0 +1,27 @@
+# Secret-scan configuration, used by CI, the pre-commit hook and `make secrets`.
+#
+# tracewatch redacts secrets, so its tests and fixtures contain fake ones on purpose. Each file
+# below is allowed by exact path and says why. A new file with secret-shaped text is NOT
+# covered: add it here with a reason, or the scan fails.
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake credentials held on purpose to exercise redaction and capture"
+paths = [
+  # Decoy credentials the simulated intruder and demo workload send to a local server.
+  '''^tests/fixtures/badactor\.sh$''',
+  '''^tests/fixtures/demo_workload\.sh$''',
+  # Canary secrets that the integration scripts plant to check they never reach a report.
+  '''^tests/integration/canary\.sh$''',
+  '''^tests/integration/streaming\.sh$''',
+  '''^tests/integration/ws_client\.py$''',
+  # Unit tests that feed secret-shaped text to the redactor and the file and websocket capture.
+  '''^tests/test_redact\.py$''',
+  '''^tests/test_filecapture\.py$''',
+  '''^tests/test_ws_addon\.py$''',
+  # The published example report: WebSocket handshake nonces (public protocol values) and curl
+  # commands with decoy credentials.
+  '''^docs/examples/demo\.html$''',
+]
