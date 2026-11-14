@@ -11,3 +11,5 @@ out/
 .vscode/
 *.code-workspace
 .DS_Store
+# build output
+dist/

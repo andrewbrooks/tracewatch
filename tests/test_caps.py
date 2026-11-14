@@ -10,6 +10,15 @@ import pytest
 from tracewatch import tracee
 
 
+def _zstd():
+    """The zstd module for this Python: the standard library on 3.14+, the backport before."""
+    try:
+        from compression import zstd  # Python 3.14+
+    except ImportError:
+        from backports import zstd  # Python < 3.14
+    return zstd
+
+
 @pytest.fixture
 def addon(tmp_path, monkeypatch):
     """Fresh import of proxy_addon with small caps and a temp output."""
@@ -121,7 +130,8 @@ def _enc_headers(enc):
 
 def test_brotli_and_zstd_round_trip_at_any_size_up_to_the_limit(addon):
     import brotli
-    from backports import zstd
+
+    zstd = _zstd()
 
     text = ("VISMARKenc line of text\n" * 20000).encode()  # ~480 KB decoded
     for enc, blob in (("br", brotli.compress(text)), ("zstd", zstd.compress(text))):
@@ -131,7 +141,8 @@ def test_brotli_and_zstd_round_trip_at_any_size_up_to_the_limit(addon):
 
 def test_brotli_and_zstd_bombs_are_refused_not_expanded(addon):
     import brotli
-    from backports import zstd
+
+    zstd = _zstd()
 
     for enc, blob in (("br", brotli.compress(b"A" * 8_000_000)), ("zstd", zstd.compress(b"A" * 8_000_000))):
         assert len(blob) < 100_000
@@ -141,7 +152,8 @@ def test_brotli_and_zstd_bombs_are_refused_not_expanded(addon):
 
 def test_truncated_and_garbage_encoded_bodies_are_described_never_raise(addon):
     import brotli
-    from backports import zstd
+
+    zstd = _zstd()
 
     for enc, good in (
         ("br", brotli.compress(b"hello world" * 1000)),

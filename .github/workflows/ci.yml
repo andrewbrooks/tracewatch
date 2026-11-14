@@ -1,38 +1,80 @@
-# Lint, unit tests, and the parts of the browser suite that do not need Docker or kernel tracing.
-# The integration scripts (tests/integration/*.sh) record real processes under a privileged Tracee container and are
-# run by hand; they are intentionally not part of CI.
+# Lint, type check, unit tests, a secret scan, a dependency audit, and the parts of the browser suite that do not
+# need Docker or kernel tracing. The integration scripts (tests/integration/*.sh) record real processes under a
+# privileged Tracee container and are run by hand; they are intentionally not part of CI.
+#
+# Actions are pinned to full commit SHAs (the comment names the release) so a moved tag cannot change what runs with
+# this repository's permissions. Dependabot keeps the pins current.
 name: ci
 
 on:
   push:
+    branches: [main]
   pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
+    name: checks (python ${{ matrix.python }})
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest supported Python and the newest, so a change in what the runner ships cannot surprise us.
+        python: ["3.12", "3.14"]
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+        with:
+          python-version: ${{ matrix.python }}
       - run: uv sync --locked
       - run: uv run ruff check .
       - run: uv run ruff format --check .
+      - run: uv run mypy
       - run: uv run pytest -q
 
   browser:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         browser: [chromium, firefox]
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
       - run: uv sync --locked
       - run: uv run playwright install --with-deps ${{ matrix.browser }}
       # Without a demo recording the suite runs its synthetic-data checks only (edge cases, hostile data, big report).
       - run: uv run python tests/browser/run.py
         env:
           TW_BROWSER: ${{ matrix.browser }}
+
+  audit:
+    name: dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
+      # Fails on any known vulnerability in the locked dependencies. A new advisory is a reason to bump the lock.
+      - run: uv audit --preview-features audit-command
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # scan history, not just the latest commit
+      # Reads .gitleaks.toml, which allows the fake credentials the redaction tests hold on purpose.
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
