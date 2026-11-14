@@ -89,6 +89,7 @@ def image_info() -> dict:
 
 
 def docker_run(run_id: str, name: str, tracee_args: list[str]) -> None:
+    """Start the Tracee container, detached and labelled with the run id."""
     subprocess.run(
         ["docker", "run", "-d", "--name", name, "--label", f"tracewatch.run={run_id}", *_BASE, IMAGE, *tracee_args],
         check=True,
@@ -97,6 +98,7 @@ def docker_run(run_id: str, name: str, tracee_args: list[str]) -> None:
 
 
 def first_event(name: str, timeout: float = 90) -> dict | None:
+    """Wait up to `timeout` seconds for the container's first event and return it parsed, or None."""
     end = time.time() + timeout
     while time.time() < end:
         out = subprocess.run(["docker", "logs", name], capture_output=True, text=True).stdout
@@ -120,19 +122,25 @@ def bootstrap_host_pid(run_id: str, timeout: float = 90) -> int | None:
 
 
 def container_running(name: str) -> bool:
+    """Whether the named container is running."""
     r = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name], capture_output=True, text=True)
     return r.stdout.strip() == "true"
 
 
 def stop_and_remove(name: str, grace: int = 3) -> None:
+    """Stop the container, giving it `grace` seconds. Despite the name this does not remove it; callers call `remove`
+    afterwards."""
     subprocess.run(["docker", "stop", "-t", str(grace), name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def remove(name: str) -> None:
+    """Force-remove the container, ignoring failures."""
     subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def scoped_args(host_pid: int, file_patterns: list[str] | None = None) -> list[str]:
+    """Tracee's arguments for one run: the events to record, file-open events for the watched paths, and a scope limited
+    to the target's process tree (by host pid), as JSON."""
     pats = file_watch_patterns() if file_patterns is None else file_patterns
     args = ["--events", EVENTS, "--events", SEND_EVENTS]
     for w in WRITE_EVENTS:
@@ -202,6 +210,8 @@ class Collector(threading.Thread):
         self.error: str | None = None
 
     def run(self) -> None:
+        """Thread body: run the Tracee client and read its output line by line, filter and redact each line, and append
+        the kept ones to the output file within the size cap. A failure is recorded in `error`."""
         try:
             self.proc = subprocess.Popen(
                 [
@@ -278,5 +288,6 @@ class Collector(threading.Thread):
         return b'"eventName":"sched_process_exit"' in line and b'"processId":%d,' % pid in line
 
     def stop(self) -> None:
+        """Kill the Tracee client if it is still running."""
         if self.proc and self.proc.poll() is None:
             self.proc.kill()

@@ -35,6 +35,7 @@ class _StderrHandler(logging.StreamHandler):
 
     @property
     def stream(self) -> TextIO:
+        """The current sys.stderr."""
         return sys.stderr
 
 

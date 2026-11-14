@@ -271,6 +271,8 @@ MAX_RESCANS = 8  # per connection: each scan blocks the proxy loop for as long a
 
 
 def client_connected(client: connection.Client) -> None:
+    """A client connected to the proxy. Find which local processes hold the other end of the socket (the kernel's socket
+    table, then /proc) and record them with the connection, so a request can be attributed to a process."""
     t0 = time.perf_counter()
     sport, pport = client.peername[1], client.sockname[1]
     inode = None
@@ -302,6 +304,7 @@ def client_connected(client: connection.Client) -> None:
 
 
 def http_connect(flow: http.HTTPFlow) -> None:
+    """A CONNECT tunnel was requested (HTTPS through the proxy): record it."""
     _emit(
         "connect",
         lambda: {
@@ -316,6 +319,7 @@ def http_connect(flow: http.HTTPFlow) -> None:
 
 
 def http_connect_error(flow: http.HTTPFlow) -> None:
+    """A CONNECT tunnel failed: record the redacted error."""
     _emit("flow_result", lambda: {"kind": "flow_result", "flow_id": flow.id, "error": _red.text(str(flow.error))})
 
 
@@ -332,6 +336,7 @@ def _rescan(conn_id: str) -> dict:
 
 
 def request(flow: http.HTTPFlow) -> None:
+    """A request arrived: record it, redacted, together with the processes currently holding its socket."""
     _emit(
         "flow",
         lambda: {
@@ -388,6 +393,8 @@ def _timing(flow: http.HTTPFlow) -> dict:
 
 
 def response(flow: http.HTTPFlow) -> None:
+    """The response is complete: record its status, headers and capped, redacted body, using the streamed copy when the
+    body was streamed."""
     st = _streams.pop(flow.id, None)
     resp = flow.response
     if resp is None:  # mitmproxy calls this hook only once the response exists
@@ -510,6 +517,7 @@ def _ws_state(flow: http.HTTPFlow) -> dict:
 
 
 def websocket_start(flow: http.HTTPFlow) -> None:
+    """A websocket connection opened: record it and start counting its messages."""
     _ws_state(flow)
     _emit(
         "ws_open",
@@ -543,6 +551,8 @@ def _ws_body(msg: WebSocketMessage, st: dict) -> dict:
 
 
 def websocket_message(flow: http.HTTPFlow) -> None:
+    """Record one websocket message, capped and redacted, or only count it once the connection's record limit is
+    reached."""
     websocket = flow.websocket
     if websocket is None:  # mitmproxy calls this hook only for websocket flows
         return
@@ -572,6 +582,7 @@ def websocket_message(flow: http.HTTPFlow) -> None:
 
 
 def websocket_end(flow: http.HTTPFlow) -> None:
+    """A websocket closed: record the close code and the totals, including messages that were counted but not stored."""
     st = _ws.pop(flow.id, None) or {"n": {"c2s": 0, "s2c": 0}, "bytes": {"c2s": 0, "s2c": 0}, "sup_records": 0}
     ws = flow.websocket
     code = ws.close_code if ws else None
@@ -592,12 +603,14 @@ def websocket_end(flow: http.HTTPFlow) -> None:
 
 
 def error(flow: http.HTTPFlow) -> None:
+    """A flow failed: drop its per-flow state and record the redacted error."""
     _streams.pop(flow.id, None)
     _ws.pop(flow.id, None)
     _emit("flow_result", lambda: {"kind": "flow_result", "flow_id": flow.id, "error": _red.text(str(flow.error))})
 
 
 def done() -> None:
+    """The proxy is shutting down: write the redaction and cap summaries that the recorder reads for the manifest."""
     _write({"kind": "redaction_summary", "source": "proxy", "counts": dict(_red.counts)}, essential=True)
     _write(
         {

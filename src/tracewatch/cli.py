@@ -12,6 +12,9 @@ DEFAULT_RUNS = "out/runs"
 
 
 def main(argv: list[str] | None = None) -> int:
+    """Run the command line and return the exit status. 0 is success. `verify` returns its verdict code (0 complete up
+    to 4 unreadable), `diff` returns 1 when behavior changed, `sweep` returns 1 if any cleanup failed, and a path
+    that is not a run directory gives 2."""
     p = argparse.ArgumentParser(prog="tracewatch", description="Flight recorder for a launched process.")
     p.add_argument("-v", "--verbose", action="store_true", help="also show debug diagnostics on stderr")
     sub = p.add_subparsers(dest="cmd", required=True)

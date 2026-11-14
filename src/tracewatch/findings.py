@@ -132,6 +132,8 @@ class _Rules:
         extra_procs: Iterable[str | None] = (),
         detail: str = "",
     ) -> None:
+        """Record one finding. `evidence` is the ids of the events it rests on; the processes involved come from those
+        events and from `extra_procs`, and the finding's time is the earliest evidence."""
         ev_by_id = self.ev_by_id
         procs_ = []
         for eid in evidence:
@@ -157,18 +159,24 @@ class _Rules:
         )
 
     def name_of(self, proc_id: str | None) -> str:
+        """A process's display name, or 'unknown process'."""
         return self.procs[proc_id]["name"] if proc_id in self.procs else "unknown process"
 
     def why_of(self, rule: str) -> str:
+        """The rule's one-line meaning from the catalog. What it cannot tell you, benign look-alikes and how to check
+        are in the catalog entry."""
         c = CATALOG[rule]
         return c[
             "meaning"
         ]  # what it cannot tell you, benign look-alikes and how to check are in the rule's catalog entry
 
     def cmd_of(self, x: dict) -> str:
+        """An exec event's command line as one string."""
         return " ".join(x["detail"].get("argv") or [])
 
     def cap(self, rule: str, hits: list) -> list:
+        """Limit a rule's hits to PER_RULE_CAP and, if there were more, add one info finding that counts and cites the
+        rest."""
         if len(hits) > PER_RULE_CAP:
             self.add(
                 rule, "info", CATALOG[rule]["category"], f"... and {len(hits) - PER_RULE_CAP} more ({rule})",
@@ -599,6 +607,7 @@ class _Rules:
             )
 
     def result(self) -> list[dict]:
+        """The findings, most severe first (then by time, then rule), numbered f1, f2, and so on."""
         out = self.out
         out.sort(key=lambda f: (-SEV_ORDER[f["severity"]], f["t"], f["rule"]))
         for i, f in enumerate(out, 1):
@@ -607,6 +616,7 @@ class _Rules:
 
 
 def find(model: dict) -> list[dict]:
+    """Run every rule family over a model and return the numbered findings."""
     r = _Rules(model)
     r.file_rules()
     r.proxy_rules()

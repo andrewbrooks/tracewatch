@@ -175,6 +175,7 @@ def _dl(delta: dict) -> str:
 
 
 def render_md(d: dict) -> str:
+    """A diff result (from `compare`) as Markdown: the notable changes first, then a section for each kind of change."""
     b, a = d["before"], d["after"]
     o = ["# tracewatch diff\n"]
     o.append(f"- before: {code(b['id'])} {code(b['cmdline'], 100)} ({b['verdict']}, {b['duration_ns'] / 1e9:.1f}s)")

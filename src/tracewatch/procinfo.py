@@ -15,10 +15,13 @@ def start_ticks(pid: int) -> int | None:
 
 
 def same_process(pid: int, ticks: int | None) -> bool:
+    """Whether `pid` is still the same process: it exists and its start time matches `ticks`, so a recycled pid does not
+    count."""
     return ticks is not None and start_ticks(pid) == ticks
 
 
 def pid_alive(pid: int) -> bool:
+    """Whether a process with this pid exists. One we are not permitted to signal still counts as alive."""
     try:
         os.kill(pid, 0)
     except ProcessLookupError:

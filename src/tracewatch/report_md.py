@@ -38,12 +38,14 @@ def txt(s: object) -> str:
 
 
 def ts(ns: int | None) -> str:
+    """A nanosecond offset as '+1.234s', or '—' when unknown."""
     if ns is None:
         return "—"
     return f"+{ns / 1e9:.3f}s"
 
 
 def size(n: int | None) -> str:
+    """A byte count as '3.4 KB', or '—' when unknown."""
     if n is None:
         return "—"
     for unit, div in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
@@ -53,6 +55,7 @@ def size(n: int | None) -> str:
 
 
 def table(head: list[str], rows: list[list[str]]) -> str:
+    """A Markdown table, or '_none recorded_' when there are no rows."""
     if not rows:
         return "_none recorded_\n"
     out = ["| " + " | ".join(head) + " |", "|" + "|".join("---" for _ in head) + "|"]
@@ -407,6 +410,8 @@ def _notes(m: dict, o: list[str]) -> None:
 
 
 def render(m: dict) -> str:
+    """A model as a Markdown report: the header, findings, process tree, destinations, HTTP and the other sections, in
+    order."""
     o: list[str] = []
     for section in (
         _header,

@@ -22,6 +22,8 @@ DOCKER_TIMEOUT_S = 30
 
 @dataclass
 class SweepReport:
+    """What a sweep did: the runs it finalized (in a dry run, would finalize) and the problems it hit."""
+
     swept: list[str] = field(default_factory=list)  # run ids finalized (in a dry run: that would be)
     problems: list[str] = field(default_factory=list)  # things that could not be checked or cleaned up
 

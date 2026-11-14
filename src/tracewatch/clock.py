@@ -5,4 +5,6 @@ import time
 
 
 def stamp() -> dict:
+    """Wall-clock and monotonic nanosecond timestamps for a record. Both are kept: the wall clock can step, and the
+    monotonic one is what joins the proxy's records to the kernel's."""
     return {"t_wall_ns": time.time_ns(), "t_mono_ns": time.monotonic_ns()}

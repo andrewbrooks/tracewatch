@@ -68,6 +68,10 @@ def calibrate(conns: dict, connects: list[tuple[int, int]], bucket_ns: int = 20_
 def join_records(
     fl: list[dict], tr: list[dict], proxy_port: int | None, info: dict | None = None, tracee_capped: bool = False
 ) -> list[dict]:
+    """Attribute each proxy flow to the process that sent it. Calibrates the proxy and Tracee clocks, matches each
+    connection's socket holders to Tracee connect events, and uses send events to pick the sender when several
+    processes share a socket. Returns one record per flow with its pid, method, scope and candidates; `info`, if
+    given, receives the calibration and the per-connection attribution."""
     conns = {r["conn_id"]: r for r in fl if r["kind"] == "conn"}
     flows = [r for r in fl if r["kind"] == "flow"]
     # a CONNECT tunnel that never produced an HTTP flow (refused, failed, non-HTTP) is still an event
@@ -200,6 +204,8 @@ def join_records(
 
 
 def join_run(rundir: str | Path, proxy_port: int | None) -> tuple[list[dict], list[dict], list[dict]]:
+    """Load a run directory's flows and Tracee events (leaving out the recorder's own probe) and join them. Returns the
+    joined records, the flows and the Tracee events."""
     fl = load(f"{rundir}/flows.jsonl")
     raw = load(f"{rundir}/tracee.jsonl")
     tr = [e for e in raw if "eventName" in e and e["processName"] != "twprobe"]

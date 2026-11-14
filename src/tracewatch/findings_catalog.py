@@ -27,6 +27,7 @@ def rule(
     check: str,
     note: str = "",
 ) -> None:
+    """Register one rule's catalog entry: what it means, what it cannot know, benign look-alikes and how to check."""
     _R[id] = {
         "id": id, "title": title, "category": category, "severity": severity, "status": status,
         "note": note, "meaning": meaning, "cannot_know": cannot_know, "benign": benign, "check": check,

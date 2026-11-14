@@ -141,6 +141,7 @@ def _tokens() -> str:
 
 
 def esc(s: object) -> str:
+    """Escape untrusted text for HTML: control characters removed, then everything HTML-escaped, quotes included."""
     t = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", str(s if s is not None else ""))
     return html.escape(t, quote=True)
 
@@ -258,6 +259,8 @@ def _hero(d: dict, n_changes: int) -> str:
 
 
 def render(d: dict) -> str:
+    """A diff result as one standalone HTML page, with no script. Everything is escaped, and its CSP allows nothing but
+    its own stylesheet, by a per-render nonce, and no network."""
     from . import __version__
 
     nonce = secrets.token_urlsafe(18)

@@ -42,6 +42,9 @@ EX_RECORDER_FAILED = 70
 
 @dataclass
 class Options:
+    """Everything `record` is configured with: the command, where runs go, the proxy and capture limits, and what
+    happens to the target if the recorder dies or a component is lost."""
+
     argv: list[str]
     runs_root: Path
     port: int | None = None
@@ -198,6 +201,8 @@ class _Recording:
 
     # ---- things that can happen at any stage
     def stop_target(self, reason: str) -> None:
+        """Ask the target to stop (SIGTERM) because recording is no longer trustworthy, and arrange a SIGKILL after the
+        grace period. Does nothing if it has already exited or was already asked."""
         root = self.root
         if root is None or root.poll() is not None or self.kill_deadline:
             return
@@ -209,6 +214,7 @@ class _Recording:
         self.kill_deadline.append(time.monotonic() + self.o.kill_grace_s)
 
     def lose(self, component: str, **kw: Any) -> None:
+        """Record that a component (the proxy or Tracee) died, once, and mark the run degraded."""
         if component not in self.lost:
             self.lost.append(component)
             self.m["degraded"] = True
@@ -219,6 +225,9 @@ class _Recording:
                 self.stop_target(f"{component} died (policy: on-component-loss=stop)")
 
     def abort_start(self, why: str) -> int:
+        """A start stage failed: record why, kill the target if it is still held in its probe loop, stop what was
+        started, delete the CA private key and write a failed-to-start manifest. Returns the recorder's failure exit
+        code."""
         self.ev.emit("fatal", why=why)
         self.say(f"cannot start: {why}")
         if self.root and self.root.poll() is None:
@@ -242,6 +251,8 @@ class _Recording:
         return self.collector, self.filecap, self.root
 
     def note_caps(self, collector: tracee.Collector) -> None:
+        """Note, once each, which size caps were hit (proxy soft and hard, Tracee hard), so the manifest says what was
+        deliberately not kept."""
         run, ev, caps_hit = self.run, self.ev, self.caps_hit
         found = [f"proxy:{lv}" for lv in ("soft", "hard") if run.p(f"flags/flows_{lv}_cap").exists()]
         found += ["tracee:hard"] if collector.capped else []
@@ -257,6 +268,8 @@ class _Recording:
 
     # ---- stage 1: the intercepting proxy
     def start_proxy(self) -> int | None:
+        """Stage 1: start the intercepting proxy on a free port and wait until it is up and has written its CA
+        certificate. Returns an exit code on failure, else None."""
         o, run, redactor = self.o, self.run, self.redactor
         port = o.port or _free_port()
         self.m["proxy_port"] = port
@@ -315,6 +328,8 @@ class _Recording:
 
     # ---- stage 2: the target, started but held until the kernel tracer is attached
     def hold_root(self) -> int | None:
+        """Stage 2: start the target held in a probe loop, with the proxy and CA environment set, so nothing it does
+        goes unrecorded, and note its pid. Returns an exit code on failure, else None."""
         o, run, m = self.o, self.run, self.m
         subprocess.run(["cp", "/bin/true", str(run.p("flags/twprobe"))], check=True)
         px = f"http://127.0.0.1:{m['proxy_port']}"
@@ -337,6 +352,8 @@ class _Recording:
 
     # ---- stage 3: kernel tracing, then release the target
     def start_tracee(self) -> int | None:
+        """Stage 3: start Tracee in its container scoped to the target, attach the collector and file capture, and
+        release the target once tracing is live. Returns an exit code on failure, else None."""
         o, run, m, ev, redactor = self.o, self.run, self.m, self.ev, self.redactor
         self.say("starting kernel tracing (takes about 5-10 s)...")
         hp = tracee.bootstrap_host_pid(run.run_id)
@@ -382,6 +399,8 @@ class _Recording:
 
     # ---- stage 4: watch the target until it exits
     def supervise(self) -> int:
+        """Stage 4: watch the target until it exits. Forwards stop signals, checks that the proxy and Tracee are alive,
+        and records heartbeats and cap hits. Returns the target's exit status."""
         run, ev, flag, procs = self.run, self.ev, self.flag, self.procs
         collector, _, root = self._components()
         seq, last_hb, last_chk = 0, 0.0, 0.0
@@ -425,6 +444,8 @@ class _Recording:
 
     # ---- stage 5: stop everything and write the final manifest
     def teardown(self, rc: int) -> int:
+        """Stage 5: let Tracee flush, stop everything, delete the CA private key and write the final manifest. Returns
+        the exit code for the recorder to use."""
         o, run, m, ev, procs, redactor = self.o, self.run, self.m, self.ev, self.procs, self.redactor
         collector, filecap, _ = self._components()
         lost, cname = self.lost, self.cname
@@ -483,6 +504,8 @@ class _Recording:
         return 128 - rc if rc < 0 else rc
 
     def run_all(self) -> int:
+        """Run the stages in order. A start failure returns its exit code at once; otherwise this returns the exit code
+        from teardown."""
         for stage in (self.start_proxy, self.hold_root, self.start_tracee):
             failed = stage()
             if failed is not None:
@@ -491,6 +514,8 @@ class _Recording:
 
 
 def record(o: Options) -> int:
+    """Record a command: check that the machine can, then run the stages. Returns the target's exit code, or the
+    recorder's own failure code."""
     say = (lambda *_: None) if o.quiet else (lambda m: print(f"tracewatch: {m}", file=sys.stderr, flush=True))
     problems = preflight()
     if problems:

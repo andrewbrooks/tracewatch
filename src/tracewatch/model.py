@@ -55,6 +55,7 @@ def _args(e: dict) -> dict:
 
 
 def cmdline(argv: list[str]) -> str:
+    """An argv as one shell-quoted command line."""
     return " ".join(shlex.quote(str(a)) for a in argv)
 
 
@@ -82,6 +83,8 @@ def decode_open_flags(flags: int) -> str:
 
 
 def decode_exit(a: dict) -> dict:
+    """Decode a Tracee exit event's exit and signal codes into a status: the exit code, or the signal name and whether
+    it dumped core."""
     code, sig = int(a.get("exit_code") or 0), int(a.get("signal_code") or 0)
     if sig:
         n = sig & 0x7F
@@ -129,6 +132,7 @@ class _Clock:
         self.offset, self.source, self.t0 = offset, source, t0
 
     def rel(self, rec: dict, key: str = "t_mono_ns") -> int:
+        """A proxy record's monotonic stamp as nanoseconds since the run's T0, on the Tracee clock."""
         return rec[key] + self.offset - self.t0
 
 
@@ -140,6 +144,7 @@ class _Timeline:
         self._last_resolver: dict[tuple, dict] = {}
 
     def add(self, t: int, kind: str, proc: dict | None, title: str, sub: str | None = None, **detail: Any) -> dict:
+        """Add an event and return it. Ids are assigned later, by `finish`."""
         e = {"t": t, "kind": kind, "sub": sub, "proc": proc["id"] if proc else None, "title": title, "detail": detail}
         self.events.append(e)
         return e
@@ -156,6 +161,7 @@ class _Timeline:
         self._last_resolver[key] = self.add(t, "dns", proc, title, "resolver", resolver=resolver, count=1, **detail)
 
     def finish(self) -> list[dict]:
+        """Sort the events by time, number them e0, e1, and so on, and return them."""
         self.events.sort(key=lambda x: x["t"])
         for i, e in enumerate(self.events):
             e["id"] = f"e{i}"
@@ -173,6 +179,8 @@ class _Attribution:
         self.flow_attr = info.get("flows", {})  # per-request overrides: the sender on a socket several processes hold
 
     def proc_at(self, pid: int | None, t_rel: int) -> dict | None:
+        """The process with this pid that was alive at that time (within 50 ms of slack), else the latest process with
+        that pid, else None."""
         cands = self.by_pid.get(pid, []) if pid is not None else []
         if not cands:
             return None
@@ -184,6 +192,7 @@ class _Attribution:
         return (live or cands)[-1]
 
     def conn_proc(self, conn_id: str, t_rel: int, flow_id: str | None = None) -> tuple[dict | None, dict]:
+        """The process a connection, or one request on it, belongs to, and the raw attribution record it came from."""
         a = self.flow_attr.get(flow_id) or self.conn_attr.get(conn_id) or {}
         return self.proc_at(a.get("pid"), t_rel), a
 
