@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import subprocess
 import threading
 import time
 from pathlib import Path
+
+from .log import log_unexpected
+
+logger = logging.getLogger(__name__)
 
 IMAGE = "aquasec/tracee:0.24.1"  # pinned: the version this was tested with (same digest as :latest when pinned)
 CAP_RESERVE = 4096  # headroom below the cap for the marker line
@@ -233,8 +238,13 @@ class Collector(threading.Thread):
                 if self.transform:
                     try:
                         data = self.transform(data)
-                    except Exception:
+                    except Exception as e:
                         self.redaction_failures += 1
+                        if self.redaction_failures == 1:  # once, not per event: a broken transform fails on all of them
+                            logger.warning(
+                                "tracee: redaction failed (%s); lines it cannot redact are replaced by a marker",
+                                type(e).__name__,
+                            )
                         data = b'{"kind":"redaction_failed","where":"tracee"}\n'
                 if self.max_bytes and self.written + len(data) > self.max_bytes - CAP_RESERVE:
                     if not self.capped:
@@ -256,6 +266,7 @@ class Collector(threading.Thread):
             os.close(fd)
         except Exception as e:
             self.error = repr(e)
+            log_unexpected(logger, "tracee collector", e)
 
     def _is_exit(self, line: bytes) -> bool:
         return b'"eventName":"sched_process_exit"' in line and b'"processId":%d,' % self.watch_exit_pid in line

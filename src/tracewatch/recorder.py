@@ -96,7 +96,7 @@ def last_records(path: Path, kinds: set[str], tail: int = 65536) -> dict[str, di
         try:
             r = json.loads(line)
         except ValueError:
-            continue
+            continue  # reading from a byte offset can start mid-line, and a kill can truncate the last line
         if r.get("kind") in kinds:
             out[r["kind"]] = r
     return out

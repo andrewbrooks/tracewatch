@@ -18,6 +18,13 @@ _FORMAT = "tracewatch: %(levelname)s: %(message)s"
 _MARK = "_tracewatch_handler"
 
 
+def log_unexpected(logger: logging.Logger, what: str, exc: BaseException) -> None:
+    """Log an exception that a thread or hook deliberately survives. The error line names only the exception type,
+    because a message can quote captured content; the full traceback is logged at debug level (-v)."""
+    logger.error("%s: unexpected %s; continuing", what, type(exc).__name__)
+    logger.debug("%s: traceback", what, exc_info=exc)
+
+
 class _StderrHandler(logging.StreamHandler):
     """Writes to whatever sys.stderr is when a record is emitted, not when the handler was made. A handler that
     kept the first stream would write to a closed one after anything rebinds stderr (a test runner, a wrapper)."""

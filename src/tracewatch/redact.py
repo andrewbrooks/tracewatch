@@ -200,7 +200,7 @@ class Redactor:
                     )
                     continue
                 except ValueError:
-                    pass
+                    pass  # not JSON after all: fall through and redact the line as text
             out.append(self.text(line))
         return "\n".join(out)
 

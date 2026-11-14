@@ -3,6 +3,7 @@
 import importlib
 import io
 import json
+import logging
 import threading
 
 import pytest
@@ -232,3 +233,33 @@ def test_collector_redaction_failure_writes_placeholder_never_the_line(monkeypat
     assert c.redaction_failures == 2
     assert recs == [{"kind": "redaction_failed", "where": "tracee"}] * 2
     assert "pad" not in (tmp_path / "t.jsonl").read_text()
+
+
+# ---- what is logged when something fails (never the content or the exception message) ----------------------------
+def test_a_failed_redaction_logs_the_error_type_and_drops_the_content(addon, tmp_path, caplog):
+    def build():
+        raise RuntimeError("secret-token-123")
+
+    with caplog.at_level(logging.WARNING, logger="tracewatch"):
+        addon._emit("flow", build)
+    assert lines(addon, tmp_path)[-1]["kind"] == "redaction_failed"
+    text = " ".join(r.getMessage() for r in caplog.records)
+    assert "flow" in text and "RuntimeError" in text and "secret-token-123" not in text
+
+
+def test_a_flag_that_cannot_be_written_is_logged(addon, monkeypatch, tmp_path, caplog):
+    monkeypatch.setattr(addon, "FLAGS_DIR", str(tmp_path / "missing" / "dir"))
+    with caplog.at_level(logging.WARNING, logger="tracewatch"):
+        addon._flag("capped")
+    assert any("could not write the capped flag" in r.getMessage() for r in caplog.records)
+
+
+def test_collector_redaction_failure_is_logged_once_not_per_event(monkeypatch, tmp_path, caplog):
+    def boom(line):
+        raise RuntimeError("secret-token-123")
+
+    with caplog.at_level(logging.WARNING, logger="tracewatch"):
+        c, _ = run_collector(monkeypatch, tmp_path, [ev(1), ev(2), ev(3)], transform=boom)
+    assert c.redaction_failures == 3  # every line is still replaced by the marker
+    warnings = [r.getMessage() for r in caplog.records if "redaction failed" in r.getMessage()]
+    assert len(warnings) == 1 and "RuntimeError" in warnings[0] and "secret-token-123" not in warnings[0]
