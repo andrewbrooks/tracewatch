@@ -10,7 +10,7 @@ usage: python tools/privilege_probe.py            # print the plan; start nothin
 
 The search:
   1. The baseline (today's flags) must work, or the machine cannot run Tracee at all and nothing else is meaningful.
-  2. `--privileged` is replaced by the documented capability list, first with the default seccomp and AppArmor
+  2. `--privileged` is replaced by the documented capability list plus DAC_OVERRIDE (see OBSERVED_CAPS), first with the default seccomp and AppArmor
      profiles, then without them, then with CAP_SYS_ADMIN added. The first that works is the starting point.
   3. From there each capability and each extra flag is removed in turn, and kept out if Tracee still works.
   4. Two extra restrictions (read-only root filesystem, no-new-privileges) are added if they cause no failure.
@@ -48,6 +48,11 @@ LABEL = "tracewatch.probe"
 # cgroup_skb network capture, CAP_SYSLOG for /proc/kallsyms, CAP_IPC_LOCK on some distributions, CAP_SETPCAP so
 # Tracee can reduce its own capabilities after start-up.
 DOCUMENTED_CAPS = ("SYS_RESOURCE", "BPF", "PERFMON", "SYS_PTRACE", "NET_ADMIN", "SYSLOG", "IPC_LOCK", "SETPCAP")
+# Not in Tracee's documentation, but measured: with only the documented list (even plus SYS_ADMIN) Tracee 0.24.1 exits at
+# start-up with "could not set capabilities: operation not permitted" (Docker Engine 29.1 on Ubuntu 24.04, WSL2 kernel
+# 6.18). Adding DAC_OVERRIDE fixes it; CHOWN, FOWNER, KILL, SYS_CHROOT and DAC_READ_SEARCH were each tried and not needed.
+OBSERVED_CAPS = ("DAC_OVERRIDE",)
+STARTING_CAPS = (*DOCUMENTED_CAPS, *OBSERVED_CAPS)
 # What tracewatch needs Tracee to report for the probe workload. sendto/sendmsg/sendmmsg are also requested by
 # tracewatch, but the shell workload sends with write(), so they are not required here.
 REQUIRED_EVENTS = frozenset(
@@ -127,13 +132,13 @@ ADDABLE_FLAGS = ("read_only_rootfs", "no_new_privileges")
 
 
 def documented_starts() -> list[Spec]:
-    """Non-privileged starting points, narrowest first: the documented capabilities with Docker's default seccomp and
+    """Non-privileged starting points, narrowest first: the documented and observed capabilities with Docker's default seccomp and
     AppArmor profiles, then with both unconfined, then with CAP_SYS_ADMIN added (needed on older kernels)."""
-    base = Spec(privileged=False, caps=DOCUMENTED_CAPS)
-    unconfined = Spec(privileged=False, caps=DOCUMENTED_CAPS, seccomp_unconfined=True, apparmor_unconfined=True)
+    base = Spec(privileged=False, caps=STARTING_CAPS)
+    unconfined = Spec(privileged=False, caps=STARTING_CAPS, seccomp_unconfined=True, apparmor_unconfined=True)
     admin = Spec(
         privileged=False,
-        caps=(*DOCUMENTED_CAPS, "SYS_ADMIN"),
+        caps=(*STARTING_CAPS, "SYS_ADMIN"),
         seccomp_unconfined=True,
         apparmor_unconfined=True,
     )
@@ -398,7 +403,7 @@ def report(outcome: Outcome) -> str:
     if outcome.final is None:
         return (
             "No non-privileged configuration worked: tracewatch needs --privileged on this machine.\n"
-            "The documented capability sets were tried with and without Docker's default seccomp and AppArmor profiles."
+            "The documented capability sets (plus DAC_OVERRIDE) were tried with and without Docker's default seccomp and AppArmor profiles."
         )
     f = outcome.final
     return "\n".join(
