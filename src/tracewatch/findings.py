@@ -186,13 +186,19 @@ class _Rules:
 
     def file_rules(self) -> None:
         """drop-and-execute, execution from a staging directory, credential file access."""
+        dropped_exec = self._drop_and_execute()
+        self._exec_from_staging(dropped_exec)
+        self._credential_file_access()
+
+    def _drop_and_execute(self) -> set[str]:
+        """A file written to a staging directory and then executed. Returns the ids of the exec events it covered, so
+        they are not reported again as plain execution from staging."""
         add = self.add
         name_of = self.name_of
-        events = self.events
         execs = self.execs
         writes = [
             e
-            for e in events
+            for e in self.events
             if e["kind"] == "file"
             and e["detail"]["mode"] in ("create", "write")
             and e["detail"]["category"] == "staging"
@@ -213,10 +219,14 @@ class _Rules:
                         [w["id"], x["id"]],
                     )
                     break
-        for x in execs:
+        return dropped_exec
+
+    def _exec_from_staging(self, dropped_exec: set[str]) -> None:
+        """A program run from a temporary directory, other than the ones drop-and-execute already reported."""
+        for x in self.execs:
             exe = x["detail"].get("exe") or ""
             if exe.startswith(STAGING) and x["id"] not in dropped_exec:
-                add(
+                self.add(
                     "exec-from-staging",
                     "medium",
                     "execution",
@@ -225,14 +235,17 @@ class _Rules:
                     "/dev/shm is used by installers and by malware alike.",
                     [x["id"]],
                 )
-        for e in events:
+
+    def _credential_file_access(self) -> None:
+        """A process opening a credential store. Well-known clients reading their own files are low severity."""
+        for e in self.events:
             if e["kind"] != "file" or e["detail"]["category"] != "credential":
                 continue
-            n = name_of(e["proc"])
+            n = self.name_of(e["proc"])
             benign = n in CRED_CLIENTS
             write = e["detail"]["mode"] in ("create", "write")
             sev = "high" if (write or not benign) else "low"
-            add(
+            self.add(
                 "credential-file-access",
                 sev,
                 "credential",
@@ -288,64 +301,78 @@ class _Rules:
 
     def http_rules(self) -> None:
         """Per-request rules: cleartext credentials, TLS failures, raw IPs, large uploads; credentials per host."""
-        add = self.add
-        model = self.model
         per_host_cred: dict[str, list[str]] = {}
-        for h in model["http"]:
+        for h in self.model["http"]:
             if not h["event"]:
                 continue
-            if h["scheme"] == "http" and _has_redaction(h):
-                add(
-                    "cleartext-credentials",
-                    "high",
-                    "exposure",
-                    f"Credentials sent over unencrypted HTTP to {h['host']}",
-                    "A request on plain HTTP carried a credential (Authorization header, password or token). Anyone on the "
-                    "network path can read it.",
-                    [h["event"]],
-                )
-            elif h["scheme"] in ("https", "wss") and _has_redaction(h):
-                per_host_cred.setdefault(h["host"], []).append(h["event"])
-            err = (h.get("error") or "").lower()
-            if err and any(k in err for k in ("certificate", "tls", "handshake", "ssl")):
-                add(
-                    "tls-verification-failure",
-                    "medium",
-                    "network",
-                    f"TLS verification failed for {h['host']}",
-                    "The proxy could not verify the upstream server's TLS certificate (expired, self-signed, wrong host or "
-                    "untrusted issuer), so the connection was refused.",
-                    [h["event"]],
-                    detail=h["error"],
-                )
-            host = h["host"]
-            if h["scheme"] != "tunnel" and _is_ip_literal(host) and not _is_local(host):
-                add(
-                    "raw-ip-destination",
-                    "low",
-                    "network",
-                    f"Request to a raw IP address: {host}",
-                    "No hostname was used, so there is no DNS record and no certificate name to check.",
-                    [h["event"]],
-                )
-            up = (h.get("req_body") or {}).get("size") or 0
-            if up >= 1_048_576:
-                add(
-                    "large-upload",
-                    "low",
-                    "network",
-                    f"Large upload ({up / 1048576:.1f} MB) to {host}",
-                    "A request body of this size can be a bulk data transfer.",
-                    [h["event"]],
-                )
+            self._credentials_in_request(h, per_host_cred)
+            self._tls_verification_failure(h)
+            self._raw_ip_destination(h)
+            self._large_upload(h)
         for host, evs in per_host_cred.items():
-            add(
+            self.add(
                 "credentials-in-requests",
                 "info",
                 "exposure",
                 f"Credentials seen in {pl(len(evs), 'request')} to {host}",
                 "Requests carried secrets (redacted in this recording). Over TLS this is normal for authenticated APIs.",
                 evs[:50],
+            )
+
+    def _credentials_in_request(self, h: dict, per_host_cred: dict[str, list[str]]) -> None:
+        """A credential in a request: reported at once over plain HTTP, tallied per host over TLS."""
+        if h["scheme"] == "http" and _has_redaction(h):
+            self.add(
+                "cleartext-credentials",
+                "high",
+                "exposure",
+                f"Credentials sent over unencrypted HTTP to {h['host']}",
+                "A request on plain HTTP carried a credential (Authorization header, password or token). Anyone on the "
+                "network path can read it.",
+                [h["event"]],
+            )
+        elif h["scheme"] in ("https", "wss") and _has_redaction(h):
+            per_host_cred.setdefault(h["host"], []).append(h["event"])
+
+    def _tls_verification_failure(self, h: dict) -> None:
+        """The proxy refused an upstream server's certificate."""
+        err = (h.get("error") or "").lower()
+        if err and any(k in err for k in ("certificate", "tls", "handshake", "ssl")):
+            self.add(
+                "tls-verification-failure",
+                "medium",
+                "network",
+                f"TLS verification failed for {h['host']}",
+                "The proxy could not verify the upstream server's TLS certificate (expired, self-signed, wrong host or "
+                "untrusted issuer), so the connection was refused.",
+                [h["event"]],
+                detail=h["error"],
+            )
+
+    def _raw_ip_destination(self, h: dict) -> None:
+        """A request to an IP address instead of a hostname, other than a local one."""
+        host = h["host"]
+        if h["scheme"] != "tunnel" and _is_ip_literal(host) and not _is_local(host):
+            self.add(
+                "raw-ip-destination",
+                "low",
+                "network",
+                f"Request to a raw IP address: {host}",
+                "No hostname was used, so there is no DNS record and no certificate name to check.",
+                [h["event"]],
+            )
+
+    def _large_upload(self, h: dict) -> None:
+        """A request body of 1 MB or more."""
+        up = (h.get("req_body") or {}).get("size") or 0
+        if up >= 1_048_576:
+            self.add(
+                "large-upload",
+                "low",
+                "network",
+                f"Large upload ({up / 1048576:.1f} MB) to {h['host']}",
+                "A request body of this size can be a bulk data transfer.",
+                [h["event"]],
             )
 
     def websocket_rules(self) -> None:

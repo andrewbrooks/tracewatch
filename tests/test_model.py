@@ -270,6 +270,17 @@ def test_finding_drop_and_execute_outranks_plain_staging_execution(tmp_path):
     assert len(f["events"]) == 2 and len(f["procs"]) == 2 and "stage.bin" in f["title"]
 
 
+def test_a_dropped_file_executed_twice_is_one_drop_and_a_plain_rerun(tmp_path):
+    tr = tree_events() + [
+        fileev(3, 102, 2, T0 + 2.1 * S, "/tmp/stage.bin", 33345),
+        execev(5, 110, 2, T0 + 2.5 * S, ["/tmp/stage.bin"]),
+        execev(6, 111, 2, T0 + 2.6 * S, ["/tmp/stage.bin"]),
+    ]
+    m = build(make_run(tmp_path, tr))
+    # the write is paired with the first execution only; the rerun is then ordinary execution from staging
+    assert sev(m, "drop-and-execute") == ["high"] and sev(m, "exec-from-staging") == ["medium"]
+
+
 def test_finding_credential_access_is_high_for_unknown_tools_low_for_known_clients(tmp_path):
     tr = tree_events() + [
         execev(5, 110, 1, T0 + 2 * S, ["cat", "/home/u/.ssh/id_rsa"]),
