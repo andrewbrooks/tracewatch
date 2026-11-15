@@ -133,7 +133,7 @@ things that should not be published, and `tools/build_examples.py` rebuilds the 
 - [How it works](docs/HOW_IT_WORKS.md): recording, reconstruction, rendering, testing
 - [Limitations](docs/LIMITATIONS.md): what it cannot see or get right
 - [Findings reference](docs/FINDINGS.md): what every rule means, what it cannot tell you, and its evidence
-- [Security notes](SECURITY.md): the privileged container, what recordings contain, the simulated intruder
+- [Security notes](SECURITY.md): the container's elevated privileges, what recordings contain, the simulated intruder
 
 ## Status
 
