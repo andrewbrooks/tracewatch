@@ -2,11 +2,15 @@
 
 tracewatch is an experiment. Please read this before running it.
 
-## It runs a privileged container
+## It runs a container with elevated privileges
 
-Kernel tracing uses [Tracee](https://github.com/aquasecurity/tracee) in a Docker container started with `--privileged`
-and the host PID namespace. That is what lets it see processes, and it also means that container has broad access to the
-machine. Only run tracewatch on a machine where that is acceptable, and review `src/tracewatch/tracee.py` first.
+Kernel tracing uses [Tracee](https://github.com/aquasecurity/tracee) in a Docker container that shares the host's
+process namespace and is granted six Linux capabilities: `SYS_ADMIN`, `SYS_PTRACE`, `SYS_RESOURCE`, `SYSLOG`,
+`IPC_LOCK` and `DAC_OVERRIDE`. It is not started with `--privileged`, and runs with `no-new-privileges` and Docker's
+default seccomp and AppArmor profiles. `SYS_ADMIN` is very broad, so treat the container as having close to root-level
+access to the machine. This capability set was measured on one kernel (WSL2, 6.18) with Docker Desktop and Docker
+Engine 29 and Tracee 0.24.1; on other kernels Tracee may fail to start or need different capabilities. Only run
+tracewatch on a machine where that is acceptable, and review `src/tracewatch/tracee.py` first.
 
 ## It intercepts HTTPS on purpose
 

@@ -55,13 +55,14 @@ navigation, prints reasonably). The Markdown report is the same information as a
 
 ## Requirements
 
-- Linux. It was developed and tested on **WSL2 with Docker Desktop**; plain Linux with Docker should work but has
-  not been exercised as much.
+- Linux. It was developed and tested on **WSL2** (Docker Desktop and Docker Engine, kernel 6.18); plain Linux with
+  Docker should work but has not been exercised.
 - Python 3.12+ (tested on 3.12 and 3.14) and [uv](https://docs.astral.sh/uv/)
-- Docker that can run a privileged container (Tracee runs as `aquasec/tracee:0.24.1`, the only version it has been tested with)
+- Docker that can run a container with extra Linux capabilities, including `SYS_ADMIN` (Tracee runs as `aquasec/tracee:0.24.1`, the only version it has been tested with)
 - `setpriv` (util-linux) and `curl` (used by the demo and tests)
 
-Tracee runs as a **privileged container with host PID access**. Only run this on a machine where that is acceptable.
+Tracee runs as a **container with host PID access and elevated capabilities, including `SYS_ADMIN`**. See
+[SECURITY.md](SECURITY.md). Only run this on a machine where that is acceptable.
 
 ## Quick start
 
