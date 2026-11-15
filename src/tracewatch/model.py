@@ -641,6 +641,32 @@ def _attach_findings(model: dict) -> None:
     model["stats"]["findings"] = {s: sum(1 for f in model["findings"] if f["severity"] == s) for s in order}
 
 
+def _run_stats(
+    procs: list[dict],
+    ev: list[dict],
+    http: list[dict],
+    websockets: list[dict],
+    destinations: list[dict],
+    dns: dict,
+    kernel: _Kernel,
+    run_end: int,
+) -> dict:
+    """The counts shown at the top of a report and compared by `diff`."""
+    return {
+        "processes": len(procs),
+        "max_depth": max([p["depth"] for p in procs] + [0]),
+        "events": len(ev),
+        "http": len(http),
+        "websockets": len(websockets),
+        "destinations": len(destinations),
+        "dns_names": len(dns["resolved"]),
+        "files": sum(1 for e in ev if e["kind"] == "file"),
+        "proxy_connects": kernel.proxy_connects,
+        "duration_ns": run_end,
+        "commands": sum(1 for e in ev if e["kind"] == "exec"),
+    }
+
+
 def build(run_dir: Path | str) -> dict:
     """Read a run directory and assemble the model. The steps run in a fixed order (the event log is built up in that
     order before it is sorted, so the order is part of the output)."""
@@ -698,19 +724,7 @@ def build(run_dir: Path | str) -> dict:
         "notes": notes,
         "redactions": manifest.get("redactions") or {},
         "recorder_events": _recorder_events(rec_events, clock),
-        "stats": {
-            "processes": len(procs),
-            "max_depth": max([p["depth"] for p in procs] + [0]),
-            "events": len(ev),
-            "http": len(http),
-            "websockets": len(websockets),
-            "destinations": len(destinations),
-            "dns_names": len(dns["resolved"]),
-            "files": sum(1 for e in ev if e["kind"] == "file"),
-            "proxy_connects": kernel.proxy_connects,
-            "duration_ns": run_end,
-            "commands": sum(1 for e in ev if e["kind"] == "exec"),
-        },
+        "stats": _run_stats(procs, ev, http, websockets, destinations, dns, kernel, run_end),
     }
     _attach_findings(model)
     return model
@@ -742,29 +756,36 @@ def _run_meta(manifest: dict, integ: dict, root: dict | None, run_end: int) -> d
     }
 
 
-def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict]:
+def _new_process_node(e: dict) -> dict:
+    """The record for a process, from the first event seen for it. Underscored fields are working state, dropped
+    before the model is published."""
+    return {
+        "_eid": e["processEntityId"],
+        "_parent_eid": e.get("parentEntityId"),
+        "pid": e["processId"],
+        "ppid": e["parentProcessId"],
+        "uid": e.get("userId"),
+        "name": e.get("processName"),
+        "exe": None,
+        "argv": [],
+        "cwd": None,
+        "execs": [],
+        "_start_raw": e.get("threadStartTime") or e["timestamp"],
+        "end": None,
+        "exit": None,
+        "children": [],
+        "counts": {},
+    }
+
+
+def _read_process_events(tr: list[dict], t0: int) -> dict[int, dict]:
+    """One node per process entity, filled in from its exec and exit events in time order."""
     nodes: dict[int, dict] = {}
     for e in sorted(tr, key=lambda x: x["timestamp"]):
         eid = e["processEntityId"]
         n = nodes.get(eid)
         if n is None:
-            n = nodes[eid] = {
-                "_eid": eid,
-                "_parent_eid": e.get("parentEntityId"),
-                "pid": e["processId"],
-                "ppid": e["parentProcessId"],
-                "uid": e.get("userId"),
-                "name": e.get("processName"),
-                "exe": None,
-                "argv": [],
-                "cwd": None,
-                "execs": [],
-                "_start_raw": e.get("threadStartTime") or e["timestamp"],
-                "end": None,
-                "exit": None,
-                "children": [],
-                "counts": {},
-            }
+            n = nodes[eid] = _new_process_node(e)
         n["_start_raw"] = min(n["_start_raw"], e.get("threadStartTime") or e["timestamp"])
         n["name"] = e.get("processName") or n["name"]
         a = _args(e)
@@ -775,6 +796,11 @@ def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict
         elif e["eventName"] == "sched_process_exit" and a.get("process_group_exit"):
             n["end"] = e["timestamp"] - t0
             n["exit"] = decode_exit(a)
+    return nodes
+
+
+def _finish_nodes(nodes: dict[int, dict], t0: int) -> None:
+    """Start time, command line and display name for each node, now that all its events have been read."""
     for n in nodes.values():
         n["start"] = max(0, n["_start_raw"] - t0)
         n["cmdline"] = cmdline(n["argv"]) if n["argv"] else (n["name"] or "?")
@@ -783,12 +809,19 @@ def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict
             n["name"] = os.path.basename(n["argv"][0].lstrip("-")) or n["name"]  # what was typed: `sh`, not `dash`
         elif n["exe"]:
             n["name"] = os.path.basename(n["exe"])
-    # tree structure
+
+
+def _link_parents(nodes: dict[int, dict]) -> None:
+    """Point each node at its parent node (if the parent was traced) and add it to the parent's children."""
     for n in nodes.values():
         par = nodes.get(n["_parent_eid"])
         n["_parent"] = par if par is not None and par is not n else None
         if n["_parent"] is not None:
             n["_parent"]["children"].append(n)
+
+
+def _order_tree(nodes: dict[int, dict], root_pid: int | None) -> list[dict]:
+    """Depth-first order of the process tree, the target's tree first, with each node's depth set."""
     roots = [n for n in nodes.values() if n["_parent"] is None]
     roots.sort(key=lambda n: (n["pid"] != root_pid, n["start"]))
     ordered: list[dict] = []
@@ -802,7 +835,12 @@ def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict
 
     for r in roots:
         walk(r, 0)
-    for n in ordered:  # a fork that never exec'd is the same program as its parent (a subshell, a worker)
+    return ordered
+
+
+def _inherit_from_parents(ordered: list[dict]) -> None:
+    """A fork that never exec'd is the same program as its parent (a subshell, a worker)."""
+    for n in ordered:
         par = n["_parent"]
         if not n["execs"] and par is not None:
             n["exe"], n["argv"], n["cmdline"], n["cwd"] = (
@@ -812,6 +850,10 @@ def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict
                 n["cwd"] or par["cwd"],
             )
             n["name"], n["forked"] = par["name"], True
+
+
+def _number_processes(ordered: list[dict], root_pid: int | None) -> None:
+    """Give each process its p1, p2, ... id and turn parent and child links into ids."""
     for i, n in enumerate(ordered, 1):
         n["id"] = f"p{i}"
     for n in ordered:
@@ -819,6 +861,16 @@ def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict
         n["detached"] = n["_parent"] is None and n["pid"] != root_pid
         n["children"] = [c["id"] for c in n["children"]]
         n["end_known"] = n["end"] is not None
+
+
+def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict]:
+    """The process tree from the Tracee events: one record per process in tree order, with ids p1, p2, ..."""
+    nodes = _read_process_events(tr, t0)
+    _finish_nodes(nodes, t0)
+    _link_parents(nodes)
+    ordered = _order_tree(nodes, root_pid)
+    _inherit_from_parents(ordered)
+    _number_processes(ordered, root_pid)
     return ordered
 
 
