@@ -4,9 +4,9 @@ An experiment: run a command under a Linux process tracer and an intercepting HT
 happened into a report you can read, click around in, or diff against another run.
 
 It started as a way to play with [Tracee](https://github.com/aquasecurity/tracee) (eBPF process tracing) and
-[mitmproxy](https://mitmproxy.org/), and to see how far a coding assistant could take that. It was built together with
-Claude. It is a toy-sized "flight recorder", not a security product: nothing here has been hardened,
-audited, or tested beyond the scenarios in this repository.
+[mitmproxy](https://mitmproxy.org/), and to see how far a coding assistant could take that. It is a toy-sized
+"flight recorder", not a security product: nothing here has been hardened, audited, or tested beyond the scenarios in
+this repository.
 
 ## Live demo
 
@@ -31,8 +31,11 @@ tracewatch record -- <command> [args...]     # run it; recording ends when the c
 tracewatch report <run-dir>                  # interactive HTML report (default), or --format md | json
 tracewatch diff <run-a> <run-b>              # what behaved differently? (--format md | json | html)
 tracewatch verify <run-dir>                  # what can be trusted in this recording?
-tracewatch sweep                             # clean up after a recorder that died
+tracewatch sweep [--dry-run]                 # clean up after a recorder that died (--dry-run: only preview)
 ```
+
+Add `-v` before the command name (`tracewatch -v record ...`) to see debug diagnostics on stderr; warnings and errors
+are always shown.
 
 For the command you launch (and everything it starts) it records:
 
@@ -54,7 +57,7 @@ navigation, prints reasonably). The Markdown report is the same information as a
 
 - Linux. It was developed and tested on **WSL2 with Docker Desktop**; plain Linux with Docker should work but has
   not been exercised as much.
-- Python 3.12+ and [uv](https://docs.astral.sh/uv/)
+- Python 3.12+ (tested on 3.12 and 3.14) and [uv](https://docs.astral.sh/uv/)
 - Docker that can run a privileged container (Tracee runs as `aquasec/tracee:0.24.1`, the only version it has been tested with)
 - `setpriv` (util-linux) and `curl` (used by the demo and tests)
 
@@ -113,11 +116,16 @@ The pre-commit hook scans staged changes for secrets (gitleaks) and checks lint 
 fake credentials on purpose; `.gitleaks.toml` allows them by file path, so a secret-shaped string anywhere else is
 flagged. CI runs the same checks plus type checking, a dependency audit and the browser suite.
 
+Commit messages: a summary of 72 characters or fewer in the imperative, a blank line, then a body that says why. The
+`commit-msg` hook (enabled by `make setup`) checks this.
+
 Integration tests (`tests/integration/*.sh`) record real processes and need Docker and the Tracee image.
 The browser tests (`tests/browser/run.py`; run `uv run playwright install chromium` first, `TW_BROWSER=firefox` for
 Firefox) check the interactive report's behavior, accessibility basics, and the security properties of the embedded data.
 `tests/browser/axe_check.py` runs an optional axe-core accessibility audit. `tools/audit.py` checks a repository for
 things that should not be published, and `tools/build_examples.py` rebuilds the example reports in `docs/`.
+`tools/privilege_probe.py` measures how much privilege the Tracee container needs (it prints a plan unless you pass
+`--run`).
 
 ## Documentation
 
