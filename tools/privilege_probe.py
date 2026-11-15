@@ -1,15 +1,16 @@
 """Find out how much privilege the Tracee container really needs.
 
-tracewatch starts Tracee with `--privileged` (see tracee._BASE). Tracee's documentation lists a smaller set of Linux
+tracewatch used to start Tracee with `--privileged`; it now uses the narrower set this tool found (tracee._BASE). The
+baseline here stays `--privileged`, the widest known-good starting point. Tracee's documentation lists a smaller set of Linux
 capabilities, but gives no worked example of using it, and says nothing about seccomp, AppArmor or /sys/kernel/debug.
-This tool measures instead of guessing: it runs a small workload under Tracee with the flags tracewatch uses today,
+This tool measures instead of guessing: it runs a small workload under Tracee with `--privileged`,
 then with narrower ones, and reports which narrower configurations still produce every event tracewatch relies on.
 
 usage: python tools/privilege_probe.py            # print the plan; start nothing
        python tools/privilege_probe.py --run      # run the search (needs Docker; takes several minutes)
 
 The search:
-  1. The baseline (today's flags) must work, or the machine cannot run Tracee at all and nothing else is meaningful.
+  1. The baseline (`--privileged`) must work, or the machine cannot run Tracee at all and nothing else is meaningful.
   2. `--privileged` is replaced by the documented capability list plus DAC_OVERRIDE (see OBSERVED_CAPS), first with the default seccomp and AppArmor
      profiles, then without them, then with CAP_SYS_ADMIN added. The first that works is the starting point.
   3. From there each capability and each extra flag is removed in turn, and kept out if Tracee still works.
@@ -73,7 +74,7 @@ OS_RELEASE_ENV = ["-e", "LIBBPFGO_OSRELEASE_FILE=/etc/os-release-host"]
 # ---- the configurations to try ----------------------------------------------------------------------------------
 @dataclass(frozen=True)
 class Spec:
-    """One way of starting the Tracee container. The defaults are tracewatch's flags today."""
+    """One way of starting the Tracee container. The defaults are `--privileged`, the widest known-good configuration."""
 
     privileged: bool = True
     caps: tuple[str, ...] = ()  # capabilities added after dropping all; used only when not privileged
@@ -373,7 +374,7 @@ def plan() -> str:
         f"Image: {tracee.IMAGE}",
         f"Required events: {', '.join(sorted(REQUIRED_EVENTS))}",
         "",
-        "Baseline (tracewatch today):",
+        "Baseline (widest known-good):",
         "  docker run " + " ".join(BASELINE.flags()),
         "",
         "Starting points tried if the baseline passes (first that passes is minimized):",
