@@ -209,72 +209,95 @@ class Collector(threading.Thread):
         self.proc: subprocess.Popen | None = None
         self.error: str | None = None
 
+    def _start_client(self) -> subprocess.Popen:
+        """Start the Tracee container attached, its stdout piped to us and its stderr appended to the err file."""
+        self.proc = subprocess.Popen(
+            [
+                "setpriv",
+                "--pdeathsig",
+                "SIGKILL",
+                "docker",
+                "run",
+                "--name",
+                self.container,
+                "--label",
+                f"tracewatch.run={self.run_id}",
+                "--log-driver",
+                "none",
+                *_BASE,
+                IMAGE,
+                *self.tracee_args,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=open(self.err, "ab"),
+            bufsize=0,
+            start_new_session=True,  # keep terminal signals (Ctrl-C) away from the Tracee client
+        )
+        return self.proc
+
+    def _redact(self, data: bytes) -> bytes:
+        """Apply `transform` to a line. If it fails, the line is replaced by a marker and counted; the raw line is never
+        written."""
+        if not self.transform:
+            return data
+        try:
+            return self.transform(data)
+        except Exception as e:
+            self.redaction_failures += 1
+            if self.redaction_failures == 1:  # once, not per event: a broken transform fails on all of them
+                logger.warning(
+                    "tracee: redaction failed (%s); lines it cannot redact are replaced by a marker",
+                    type(e).__name__,
+                )
+            return b'{"kind":"redaction_failed","where":"tracee"}\n'
+
+    def _store(self, fd: int, line: bytes, data: bytes) -> bool:
+        """Append a redacted line to the output unless the size cap is reached, in which case write one marker, then
+        count and drop (the caller keeps draining the pipe, because a full pipe would block Tracee and the target's
+        events). Returns whether the line was written."""
+        if self.max_bytes and self.written + len(data) > self.max_bytes - CAP_RESERVE:
+            if not self.capped:
+                self.capped = True
+                marker = b'{"kind":"cap_reached","source":"tracee","limit":%d,"written":%d}\n' % (
+                    self.max_bytes,
+                    self.written,
+                )
+                self.written += os.write(fd, marker)
+            self.dropped += 1
+            return False
+        self.written += os.write(fd, data)
+        self.lines += 1
+        self.bytes += len(line)
+        return True
+
+    def _pump(self, proc: subprocess.Popen, fd: int) -> None:
+        """Read the client's output line by line until it closes, noting when the target's exit event passes and
+        storing each kept line, fsyncing about once a second."""
+        last_sync = time.monotonic()
+        if proc.stdout is None:  # stdout=PIPE above, so this only guards the invariant
+            raise RuntimeError("the Tracee client was started without a stdout pipe")
+        for line in iter(proc.stdout.readline, b""):
+            data = line if line.endswith(b"\n") else line + b"\n"
+            if self.watch_exit_pid is not None and self.exit_seen_at is None and self._is_exit(data):
+                self.exit_seen_at = time.monotonic()
+            if self.keep and not self.keep(data):
+                self.filtered += 1
+                continue
+            if self.tap:
+                self.tap(data)
+            if not self._store(fd, line, self._redact(data)):
+                continue
+            if time.monotonic() - last_sync > 1:
+                os.fsync(fd)
+                last_sync = time.monotonic()
+
     def run(self) -> None:
         """Thread body: run the Tracee client and read its output line by line, filter and redact each line, and append
         the kept ones to the output file within the size cap. A failure is recorded in `error`."""
         try:
-            self.proc = subprocess.Popen(
-                [
-                    "setpriv",
-                    "--pdeathsig",
-                    "SIGKILL",
-                    "docker",
-                    "run",
-                    "--name",
-                    self.container,
-                    "--label",
-                    f"tracewatch.run={self.run_id}",
-                    "--log-driver",
-                    "none",
-                    *_BASE,
-                    IMAGE,
-                    *self.tracee_args,
-                ],
-                stdout=subprocess.PIPE,
-                stderr=open(self.err, "ab"),
-                bufsize=0,
-                start_new_session=True,  # keep terminal signals (Ctrl-C) away from the Tracee client
-            )
+            proc = self._start_client()
             fd = os.open(self.out, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-            last_sync = time.monotonic()
-            if self.proc.stdout is None:  # stdout=PIPE above, so this only guards the invariant
-                raise RuntimeError("the Tracee client was started without a stdout pipe")
-            for line in iter(self.proc.stdout.readline, b""):
-                data = line if line.endswith(b"\n") else line + b"\n"
-                if self.watch_exit_pid is not None and self.exit_seen_at is None and self._is_exit(data):
-                    self.exit_seen_at = time.monotonic()
-                if self.keep and not self.keep(data):
-                    self.filtered += 1
-                    continue
-                if self.tap:
-                    self.tap(data)
-                if self.transform:
-                    try:
-                        data = self.transform(data)
-                    except Exception as e:
-                        self.redaction_failures += 1
-                        if self.redaction_failures == 1:  # once, not per event: a broken transform fails on all of them
-                            logger.warning(
-                                "tracee: redaction failed (%s); lines it cannot redact are replaced by a marker",
-                                type(e).__name__,
-                            )
-                        data = b'{"kind":"redaction_failed","where":"tracee"}\n'
-                if self.max_bytes and self.written + len(data) > self.max_bytes - CAP_RESERVE:
-                    if not self.capped:
-                        self.capped = True
-                        marker = b'{"kind":"cap_reached","source":"tracee","limit":%d,"written":%d}\n' % (
-                            self.max_bytes,
-                            self.written,
-                        )
-                        self.written += os.write(fd, marker)
-                    self.dropped += 1  # keep draining: a full pipe would block Tracee and the target's events
-                    continue
-                self.written += os.write(fd, data)
-                self.lines += 1
-                self.bytes += len(line)
-                if time.monotonic() - last_sync > 1:
-                    os.fsync(fd)
-                    last_sync = time.monotonic()
+            self._pump(proc, fd)
             os.fsync(fd)
             os.close(fd)
         except Exception as e:
