@@ -37,6 +37,8 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
+      # shellcheck is preinstalled on GitHub's runners
+      - run: git ls-files '.githooks/*' | xargs shellcheck
       - run: uv run pytest -q
 
   browser:
