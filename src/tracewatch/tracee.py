@@ -49,14 +49,17 @@ def file_watch_patterns(homes: list[str] | None = None) -> list[str]:
     return list(dict.fromkeys(pats))
 
 
+# Measured with tools/privilege_probe.py (see NOTES.md, Phase 5). Tracee's documentation lists a different set; it does
+# not start without DAC_OVERRIDE, and on the kernel tested SYS_ADMIN stands in for BPF, PERFMON and NET_ADMIN.
+CAPABILITIES = ("SYS_RESOURCE", "SYS_PTRACE", "SYSLOG", "IPC_LOCK", "DAC_OVERRIDE", "SYS_ADMIN")
 _BASE = [
     "--pid=host",
-    "--cgroupns=host",
-    "--privileged",
+    "--cap-drop=ALL",
+    *(f"--cap-add={c}" for c in CAPABILITIES),
+    "--security-opt",
+    "no-new-privileges",
     "-v",
     "/etc/os-release:/etc/os-release-host:ro",
-    "-v",
-    "/sys/kernel/debug:/sys/kernel/debug",
     "-e",
     "LIBBPFGO_OSRELEASE_FILE=/etc/os-release-host",
 ]

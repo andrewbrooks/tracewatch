@@ -27,9 +27,14 @@ def logs_for(names, host_pid=None):
 
 
 # ---- configurations ---------------------------------------------------------------------------------------------
-def test_the_baseline_is_exactly_what_tracewatch_runs_today():
-    # if tracee._BASE changes, this tool must be updated to match, or it would measure the wrong thing
-    assert pp.BASELINE.flags() == tracee._BASE
+def test_the_baseline_is_privileged_and_what_tracewatch_runs_is_the_measured_narrow_set():
+    assert "--privileged" in pp.BASELINE.flags()
+    # tracee._BASE must stay the configuration the probe found, or the notes and the code disagree
+    narrow = pp.Spec(
+        privileged=False, caps=tracee.CAPABILITIES, debugfs=False, cgroupns_host=False, no_new_privileges=True
+    )
+    assert tracee._BASE == narrow.flags()
+    assert "--privileged" not in tracee._BASE
 
 
 def test_a_non_privileged_spec_drops_everything_then_adds_back():
