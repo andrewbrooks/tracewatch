@@ -206,7 +206,8 @@ while [ ! -e go ]; do ./twprobe; sleep 0.2; done
 /bin/true                              # an exec inside the traced tree
 : > "/tmp/twprobe-file-$$"             # a file opened in a watched staging directory
 exec 3<>/dev/tcp/127.0.0.1/"$2"        # a TCP connect and a socket connect
-echo twprobe >&3                       # a write on a socket
+python3 -c 'import os; os.write(3, b"twprobe")'  # a write on a socket, on fd 3 itself: bash's `echo >&3` writes
+                                       # via fd 1, which tracewatch excludes as stdio
 exec 3>&-
 rm -f "/tmp/twprobe-file-$$"
 """
