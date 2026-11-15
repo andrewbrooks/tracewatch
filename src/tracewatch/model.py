@@ -665,6 +665,15 @@ def _attach_findings(model: dict) -> None:
     model["stats"]["findings"] = {s: sum(1 for f in model["findings"] if f["severity"] == s) for s in order}
 
 
+def _root_and_run_end(procs: list[dict], ev: list[dict], root_pid: int | None) -> tuple[dict | None, int]:
+    """The target's own process record, and when the run ended: the target's exit if it was seen, else the last thing
+    that happened."""
+    end_t = max([e["t"] for e in ev] + [p["end"] or 0 for p in procs] + [0])
+    root = next((p for p in procs if p["parent"] is None and p["pid"] == root_pid), procs[0] if procs else None)
+    run_end = next((p["end"] for p in procs if root and p["id"] == root["id"] and p["end"] is not None), end_t)
+    return root, run_end
+
+
 def _run_stats(
     procs: list[dict],
     ev: list[dict],
@@ -727,9 +736,7 @@ def build(run_dir: Path | str) -> dict:
     destinations = _destinations(http, ev, ip_to_name, procs)
     dns = _dns(ev, resolved, kernel.udp_probes, ip_to_name)
     _count_events_per_process(procs, ev)
-    end_t = max([e["t"] for e in ev] + [p["end"] or 0 for p in procs] + [0])
-    root = next((p for p in procs if p["parent"] is None and p["pid"] == root_pid), procs[0] if procs else None)
-    run_end = next((p["end"] for p in procs if root and p["id"] == root["id"] and p["end"] is not None), end_t)
+    root, run_end = _root_and_run_end(procs, ev, root_pid)
     _closing_notes(notes, manifest, kernel.ca_loads)
 
     model = {
