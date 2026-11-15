@@ -47,6 +47,7 @@ def test_documented_starts_go_from_narrowest_to_widest():
     assert not base.seccomp_unconfined and unconfined.seccomp_unconfined and unconfined.apparmor_unconfined
     assert "SYS_ADMIN" in admin.caps and "SYS_ADMIN" not in unconfined.caps
     assert set(pp.DOCUMENTED_CAPS) <= set(unconfined.caps)
+    assert "DAC_OVERRIDE" in base.caps  # Tracee 0.24.1 does not start without it, though its docs do not list it
 
 
 # ---- minimizing --------------------------------------------------------------------------------------------------
