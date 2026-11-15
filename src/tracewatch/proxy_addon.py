@@ -26,6 +26,7 @@ import glob
 import json
 import logging
 import os
+import sys
 import time
 import zlib
 from collections import Counter
@@ -179,16 +180,17 @@ def _decode(raw: bytes, encoding: str) -> bytes:
                 raise ValueError("incomplete brotli data")
             return out
         if enc == "zstd":
-            try:
-                from compression import zstd  # type: ignore[import-not-found]  # Python 3.14+
-            except ImportError:
-                from backports import zstd  # Python < 3.14
+            # zstd is in the standard library from Python 3.14; before that mitmproxy installs the backport.
+            if sys.version_info >= (3, 14):
+                from compression import zstd
+            else:
+                from backports import zstd
 
-            d = zstd.ZstdDecompressor()
-            out = d.decompress(raw, max_length=limit + 1)
+            zd = zstd.ZstdDecompressor()
+            out = zd.decompress(raw, max_length=limit + 1)
             if len(out) > limit:
                 raise ValueError("decoded size over the limit")
-            if not d.eof:
+            if not zd.eof:
                 raise ValueError("incomplete zstd data")
             return out
     except ValueError:

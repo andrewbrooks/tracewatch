@@ -76,9 +76,10 @@ check_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 
-# Third-party packages that ship no type information.
+# Third-party packages that ship no type information, or that are installed only on some Pythons (the zstd backport
+# exists before Python 3.14; from 3.14 zstd is in the standard library).
 [[tool.mypy.overrides]]
-module = ["brotli"]
+module = ["brotli", "backports", "backports.zstd"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]
