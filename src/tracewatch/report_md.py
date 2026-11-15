@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 import time
+from collections.abc import Callable
 
 from .plural import pl
 
@@ -18,7 +19,7 @@ VERDICT_MARK = {
 }
 
 
-def code(s, limit: int = 160) -> str:
+def code(s: object, limit: int = 160) -> str:
     """An untrusted string as an inline code span: control characters removed, newlines flattened, pipes escaped,
     delimiter longer than any backtick run inside."""
     t = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", str(s if s is not None else "")).replace("\n", " ⏎ ").replace("\t", " ")
@@ -30,19 +31,21 @@ def code(s, limit: int = 160) -> str:
     return (d + pad + t.replace("|", "\\|") + pad + d) if t else "—"
 
 
-def txt(s) -> str:
+def txt(s: object) -> str:
     """Untrusted prose in a table cell: no markup, no HTML, no pipes."""
     t = re.sub(r"[\x00-\x08\x0b-\x1f\x7f]", "", str(s if s is not None else "")).replace("\n", " ")
     return re.sub(r"([\\`*_{}\[\]<>|#])", r"\\\1", t)
 
 
 def ts(ns: int | None) -> str:
+    """A nanosecond offset as '+1.234s', or '—' when unknown."""
     if ns is None:
         return "—"
     return f"+{ns / 1e9:.3f}s"
 
 
-def size(n) -> str:
+def size(n: int | None) -> str:
+    """A byte count as '3.4 KB', or '—' when unknown."""
     if n is None:
         return "—"
     for unit, div in (("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)):
@@ -52,6 +55,7 @@ def size(n) -> str:
 
 
 def table(head: list[str], rows: list[list[str]]) -> str:
+    """A Markdown table, or '_none recorded_' when there are no rows."""
     if not rows:
         return "_none recorded_\n"
     out = ["| " + " | ".join(head) + " |", "|" + "|".join("---" for _ in head) + "|"]
@@ -59,11 +63,11 @@ def table(head: list[str], rows: list[list[str]]) -> str:
     return "\n".join(out) + "\n"
 
 
-def _namer(m: dict):
+def _namer(m: dict) -> Callable[[str | None], str]:
     """pid-label lookup for a model: "name (pid)", or "unattributed"."""
     procs = {p["id"]: p for p in m["processes"]}
 
-    def pname(pid):
+    def pname(pid: str | None) -> str:
         return f"{procs[pid]['name']} ({procs[pid]['pid']})" if pid in procs else "unattributed"
 
     return pname
@@ -406,6 +410,8 @@ def _notes(m: dict, o: list[str]) -> None:
 
 
 def render(m: dict) -> str:
+    """A model as a Markdown report: the header, findings, process tree, destinations, HTTP and the other sections, in
+    order."""
     o: list[str] = []
     for section in (
         _header,

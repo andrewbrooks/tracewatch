@@ -175,6 +175,32 @@ def test_no_response_tee_on_101_upgrade(pa):
     assert g.id in pa._streams and callable(g.response.stream)
 
 
+def test_response_hook_without_a_response_does_nothing(pa):
+    f = tflow.tflow(resp=False)
+    assert f.response is None
+    pa.responseheaders(f)  # must not raise
+    assert f.id not in pa._streams
+
+
+def test_streamed_copy_is_kept_up_to_the_cap_then_dropped(pa, monkeypatch):
+    monkeypatch.setattr(pa, "PROCESS_CAP", 10)
+    f = tflow.tflow(resp=True)
+    pa.responseheaders(f)
+    tee = f.response.stream
+    assert tee(b"abcd") == b"abcd" and tee(b"efgh") == b"efgh"
+    assert bytes(pa._streams[f.id]["buf"]) == b"abcdefgh" and pa._streams[f.id]["over"] is False
+    assert tee(b"ijkl") == b"ijkl"  # still forwarded unchanged: only the stored copy is dropped
+    state = pa._streams[f.id]
+    assert state["over"] is True and bytes(state["buf"]) == b"" and state["size"] == 12
+
+
+def test_websocket_message_hook_without_websocket_data_does_nothing(pa, tmp_path):
+    f = tflow.tflow()
+    assert f.websocket is None
+    pa.websocket_message(f)  # must not raise
+    assert recs(tmp_path) == []
+
+
 # ---- resolve / tls / timing records (used by the report) --------------------------------------------
 def test_server_connected_records_the_name_to_ip_answer(pa, tmp_path):
     from mitmproxy.proxy.server_hooks import ServerConnectionHookData
@@ -185,6 +211,33 @@ def test_server_connected_records_the_name_to_ip_answer(pa, tmp_path):
     pa.server_connected(ServerConnectionHookData(server=server, client=tflow.tclient_conn()))
     (r,) = recs(tmp_path)
     assert r["kind"] == "resolve" and r["name"] == "example.com" and r["ip"] == "93.184.216.34" and r["port"] == 443
+
+
+def test_server_connected_without_an_address_records_nothing(pa, tmp_path):
+    from mitmproxy.proxy.server_hooks import ServerConnectionHookData
+
+    server = tflow.tserver_conn()
+    server.address = None
+    pa.server_connected(ServerConnectionHookData(server=server, client=tflow.tclient_conn()))
+    assert recs(tmp_path) == []
+
+
+def test_tls_established_server_without_an_address_records_nothing(pa, tmp_path):
+    from types import SimpleNamespace
+
+    conn = SimpleNamespace(sni="x.example", tls_version="TLSv1.3", cipher="c", alpn=None, certificate_list=[])
+    pa.tls_established_server(SimpleNamespace(conn=conn, context=SimpleNamespace(client=SimpleNamespace(id="C1"))))
+    assert recs(tmp_path) == []
+
+
+def test_tls_failure_without_an_address_falls_back_to_the_sni(pa, tmp_path):
+    from types import SimpleNamespace
+
+    conn = SimpleNamespace(sni="x.example", error="handshake failed")
+    data = SimpleNamespace(conn=conn, context=SimpleNamespace(client=SimpleNamespace(id="C1")))
+    pa._tls_failed("server")(data)
+    (r,) = recs(tmp_path)
+    assert r["kind"] == "tls_failed" and r["side"] == "server" and r["sni"] == "x.example"
 
 
 def test_tls_established_server_records_version_cipher_and_certificate(pa, tmp_path):

@@ -15,7 +15,7 @@ SEND_SLACK_NS = 10_000_000  # clock-calibration error tolerated when a send look
 SEND_NAMES = ("sendto", "sendmsg", "sendmmsg", "write", "writev")  # Tracee syscall events: who SENDS on a descriptor
 
 
-def load(path):
+def load(path: str | Path) -> list[dict]:
     """Read a JSONL file, skipping lines that do not parse. A kill can truncate the last line, which is expected;
     an unparseable line anywhere else means the file is damaged, and is logged (the file name and a count, never the
     line)."""
@@ -41,7 +41,7 @@ def load(path):
     return out
 
 
-def calibrate(conns, connects, bucket_ns=20_000_000):
+def calibrate(conns: dict, connects: list[tuple[int, int]], bucket_ns: int = 20_000_000) -> tuple[int | None, int]:
     """Estimate offset = tracee_ts - proxy_mono. Tracee timestamps are a fixed offset from CLOCK_MONOTONIC,
     so this is constant for a run even when the wall clock steps. Candidates pair each single-holder
     connection with every connect by that pid; the true offset recurs, spurious pairs scatter."""
@@ -65,7 +65,13 @@ def calibrate(conns, connects, bucket_ns=20_000_000):
     return near[len(near) // 2], top
 
 
-def join_records(fl, tr, proxy_port, info=None, tracee_capped=False):
+def join_records(
+    fl: list[dict], tr: list[dict], proxy_port: int | None, info: dict | None = None, tracee_capped: bool = False
+) -> list[dict]:
+    """Attribute each proxy flow to the process that sent it. Calibrates the proxy and Tracee clocks, matches each
+    connection's socket holders to Tracee connect events, and uses send events to pick the sender when several
+    processes share a socket. Returns one record per flow with its pid, method, scope and candidates; `info`, if
+    given, receives the calibration and the per-connection attribution."""
     conns = {r["conn_id"]: r for r in fl if r["kind"] == "conn"}
     flows = [r for r in fl if r["kind"] == "flow"]
     # a CONNECT tunnel that never produced an HTTP flow (refused, failed, non-HTTP) is still an event
@@ -90,7 +96,7 @@ def join_records(fl, tr, proxy_port, info=None, tracee_capped=False):
     # time of a connection on the Tracee clock
     when = (lambda c: c["accept_mono_ns"] + offset) if offset is not None else (lambda c: c["t_wall_ns"])
 
-    def match(pid, t):
+    def match(pid: int, t: int) -> int | None:
         best = None
         for i, (ts, p) in enumerate(connects):
             if p == pid and i not in claimed and t - WINDOW_NS <= ts <= t + SLACK_NS:
@@ -109,7 +115,7 @@ def join_records(fl, tr, proxy_port, info=None, tracee_capped=False):
         if f.get("t_mono_ns") is not None:
             flow_times.setdefault(f["conn_id"], []).append(f["t_mono_ns"])
 
-    def writer(f, c):
+    def writer(f: dict, c: dict | None) -> tuple[int | None, list[int]] | None:
         """Several processes hold this socket: who sent THIS request? The last send/write on one of the connection's
         descriptors before the request reached the proxy (earlier ones may be the opener's CONNECT or handshake).
         -> None when the socket is not shared, else (pid or None, all holders)."""
@@ -142,8 +148,7 @@ def join_records(fl, tr, proxy_port, info=None, tracee_capped=False):
                 pid=h[0], method="socket-holder" + ("" if i is not None else " (no tracee connect)"), candidates=h
             )
         elif len(h) > 1:
-            cr = [(p, match(p, t)) for p in h]
-            cr = [x for x in cr if x[1] is not None]
+            cr = [(p, hit) for p in h if (hit := match(p, t)) is not None]
             if len(cr) == 1:
                 claimed.add(cr[0][1])
                 res[c["conn_id"]] = dict(pid=cr[0][0], method="socket-holder+connect-event", candidates=h)
@@ -198,7 +203,9 @@ def join_records(fl, tr, proxy_port, info=None, tracee_capped=False):
     return out
 
 
-def join_run(rundir, proxy_port):
+def join_run(rundir: str | Path, proxy_port: int | None) -> tuple[list[dict], list[dict], list[dict]]:
+    """Load a run directory's flows and Tracee events (leaving out the recorder's own probe) and join them. Returns the
+    joined records, the flows and the Tracee events."""
     fl = load(f"{rundir}/flows.jsonl")
     raw = load(f"{rundir}/tracee.jsonl")
     tr = [e for e in raw if "eventName" in e and e["processName"] != "twprobe"]

@@ -178,6 +178,8 @@ class TempWatcher(threading.Thread):
             self.wds[wd] = path
 
     def run(self) -> None:
+        """Thread body: set up inotify on the temp roots, then read events until stopped. `ready` is set once the
+        watches exist, or once setup has failed."""
         try:
             self._libc = ctypes.CDLL(ctypes.util.find_library("c") or "libc.so.6", use_errno=True)
             self.fd = self._libc.inotify_init1(os.O_CLOEXEC | os.O_NONBLOCK)
@@ -272,10 +274,14 @@ class TempWatcher(threading.Thread):
             return dict(v) if v and time.monotonic() - v["at"] <= BUFFER_TTL_S else None
 
     def stop(self) -> None:
+        """Ask the watcher thread to finish."""
         self.stop_ev.set()
 
 
 class FileCapture(threading.Thread):
+    """Thread that records the redacted contents of files the target creates or writes. It learns paths from Tracee
+    events and from the temp-directory watcher; see the module docstring for what is and is not captured."""
+
     def __init__(
         self,
         redactor: Redactor,
@@ -301,6 +307,8 @@ class FileCapture(threading.Thread):
 
     # ---- called from the collector thread: cheap, never raises
     def tap(self, line: bytes) -> None:
+        """Called with every raw Tracee line (read-only). Remember files the target opens for writing; when a remembered
+        file is executed, look at it immediately, because a dropped file is often deleted right after it runs."""
         try:
             if _OPEN in line:
                 parsed = _event_args(line)
@@ -338,11 +346,15 @@ class FileCapture(threading.Thread):
 
     # ---- the polling thread
     def start(self) -> None:
+        """Start the temp-directory watcher and wait for its watches to exist, so nothing the target writes is missed,
+        then start this thread."""
         self.watcher.start()
         self.watcher.ready.wait(2)  # the watches must exist before the target starts writing
         super().start()
 
     def run(self) -> None:
+        """Thread body: look at the remembered files every POLL_S seconds, or sooner when woken, and rewrite files.jsonl
+        when something changed. Errors are recorded and logged, never raised."""
         last_write = time.monotonic()
         while not self.done.is_set():
             self.wake.wait(POLL_S)
@@ -435,6 +447,8 @@ class FileCapture(threading.Thread):
         os.replace(tmp, self.out)
 
     def summary(self) -> dict:
+        """Counts for the manifest: files captured, binary, truncated, dropped by the cap, not followed (symlinks),
+        bytes stored, redacted files, and any error."""
         with self.lock:
             recs = list(self.records.values())
         return {

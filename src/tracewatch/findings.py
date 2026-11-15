@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Iterable
 
 from .findings_catalog import CATALOG
 from .plural import pl
@@ -128,9 +129,11 @@ class _Rules:
         title: str,
         why: str,
         evidence: list[str],
-        extra_procs=(),
-        detail="",
-    ):
+        extra_procs: Iterable[str | None] = (),
+        detail: str = "",
+    ) -> None:
+        """Record one finding. `evidence` is the ids of the events it rests on; the processes involved come from those
+        events and from `extra_procs`, and the finding's time is the earliest evidence."""
         ev_by_id = self.ev_by_id
         procs_ = []
         for eid in evidence:
@@ -156,18 +159,24 @@ class _Rules:
         )
 
     def name_of(self, proc_id: str | None) -> str:
+        """A process's display name, or 'unknown process'."""
         return self.procs[proc_id]["name"] if proc_id in self.procs else "unknown process"
 
     def why_of(self, rule: str) -> str:
+        """The rule's one-line meaning from the catalog. What it cannot tell you, benign look-alikes and how to check
+        are in the catalog entry."""
         c = CATALOG[rule]
         return c[
             "meaning"
         ]  # what it cannot tell you, benign look-alikes and how to check are in the rule's catalog entry
 
     def cmd_of(self, x: dict) -> str:
+        """An exec event's command line as one string."""
         return " ".join(x["detail"].get("argv") or [])
 
     def cap(self, rule: str, hits: list) -> list:
+        """Limit a rule's hits to PER_RULE_CAP and, if there were more, add one info finding that counts and cites the
+        rest."""
         if len(hits) > PER_RULE_CAP:
             self.add(
                 rule, "info", CATALOG[rule]["category"], f"... and {len(hits) - PER_RULE_CAP} more ({rule})",
@@ -476,7 +485,10 @@ class _Rules:
         cap = self.cap
         execs = self.execs
         for x in cap("masquerade", [x for x in execs if _masquerade(x["detail"])]):
-            why, sev = _masquerade(x["detail"])
+            hit = _masquerade(x["detail"])
+            if hit is None:  # the list above kept only the execs that match
+                continue
+            why, sev = hit
             add("masquerade", sev, "evasion", f"{name_of(x['proc'])} pretends to be something else", why_of("masquerade") + " " + why,
                 [x["id"]], detail=cmd_of(x)[:200])  # fmt: skip
 
@@ -595,6 +607,7 @@ class _Rules:
             )
 
     def result(self) -> list[dict]:
+        """The findings, most severe first (then by time, then rule), numbered f1, f2, and so on."""
         out = self.out
         out.sort(key=lambda f: (-SEV_ORDER[f["severity"]], f["t"], f["rule"]))
         for i, f in enumerate(out, 1):
@@ -603,6 +616,7 @@ class _Rules:
 
 
 def find(model: dict) -> list[dict]:
+    """Run every rule family over a model and return the numbered findings."""
     r = _Rules(model)
     r.file_rules()
     r.proxy_rules()
@@ -621,7 +635,7 @@ def find(model: dict) -> list[dict]:
     return r.result()
 
 
-def _masquerade(d: dict):
+def _masquerade(d: dict) -> tuple[str, str] | None:
     """(explanation, severity) when this exec looks like a program posing as another, else None."""
     argv, exe = d.get("argv") or [], d.get("exe") or ""
     if not argv or not exe:

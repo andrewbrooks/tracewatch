@@ -12,10 +12,22 @@ from __future__ import annotations
 STATUSES = ("observed", "synthetic")
 CATEGORIES = ("execution", "credential", "exposure", "network", "integrity", "reliability", "evasion", "privilege")
 
-_R = {}
+_R: dict[str, dict] = {}
 
 
-def rule(id, title, category, severity, status, meaning, cannot_know, benign, check, note=""):
+def rule(
+    id: str,
+    title: str,
+    category: str,
+    severity: str,
+    status: str,
+    meaning: str,
+    cannot_know: str,
+    benign: list[str],
+    check: str,
+    note: str = "",
+) -> None:
+    """Register one rule's catalog entry: what it means, what it cannot know, benign look-alikes and how to check."""
     _R[id] = {
         "id": id, "title": title, "category": category, "severity": severity, "status": status,
         "note": note, "meaning": meaning, "cannot_know": cannot_know, "benign": benign, "check": check,

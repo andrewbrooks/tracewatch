@@ -263,3 +263,13 @@ def test_collector_redaction_failure_is_logged_once_not_per_event(monkeypatch, t
     assert c.redaction_failures == 3  # every line is still replaced by the marker
     warnings = [r.getMessage() for r in caplog.records if "redaction failed" in r.getMessage()]
     assert len(warnings) == 1 and "RuntimeError" in warnings[0] and "secret-token-123" not in warnings[0]
+
+
+def test_is_exit_matches_only_the_watched_pid_and_tolerates_none(tmp_path):
+    c = tracee.Collector("r", "c", [], tmp_path / "t.jsonl", tmp_path / "t.err")
+    exit_line = b'{"eventName":"sched_process_exit","processId":4242,"x":1}'
+    assert c._is_exit(exit_line) is False  # nothing to watch yet: used to raise a TypeError
+    c.watch_exit_pid = 4242
+    assert c._is_exit(exit_line) is True
+    assert c._is_exit(b'{"eventName":"sched_process_exit","processId":4243,"x":1}') is False
+    assert c._is_exit(b'{"eventName":"sched_process_exec","processId":4242,"x":1}') is False

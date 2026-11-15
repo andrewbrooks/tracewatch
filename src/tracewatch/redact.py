@@ -24,6 +24,8 @@ import json
 import re
 import secrets
 from collections import Counter
+from collections.abc import Callable, Iterable
+from typing import Any
 from urllib.parse import parse_qsl, quote_plus
 
 SENSITIVE_WORDS = frozenset(
@@ -71,6 +73,7 @@ def name_is_sensitive(name: str) -> bool:
 
 
 def is_textual(content_type: str) -> bool:
+    """Whether a content type is text-like, so its body may be stored (after redaction)."""
     ct = (content_type or "").lower()
     return any(t in ct for t in TEXT_TYPES)
 
@@ -94,12 +97,18 @@ _TAG = re.compile(r"\[REDACTED:[A-Za-z0-9_\-]+:[0-9a-f]{8}\]")  # the exact shap
 
 
 class Redactor:
+    """Pattern- and structure-based redaction. A secret is replaced by a tag naming its kind and a short keyed hash, so
+    equal secrets get equal tags within a run without being recoverable. `counts` tallies what was redacted, by kind.
+    There is one key per run."""
+
     def __init__(self, key: bytes | None = None):
         self.key = key or secrets.token_bytes(32)
         self.counts: Counter[str] = Counter()
 
     # ---- primitives
     def tag(self, kind: str, value: str) -> str:
+        """Replace a secret by a `[REDACTED:kind:hash]` tag and count it. The hash is keyed (HMAC), so it cannot be
+        reversed or compared across runs."""
         self.counts[kind] += 1
         h = hmac.new(self.key, value.encode("utf-8", "replace"), hashlib.sha256).hexdigest()[:8]
         return f"{_REDACTED}{kind}:{h}]"
@@ -113,8 +122,12 @@ class Redactor:
         s = _BEARER.sub(lambda m: m.group(1) + self.tag("bearer", m.group(2)), s)
         s = _BASIC.sub(lambda m: m.group(1) + self.tag("basic", m.group(2)), s)
         for kind, rx in _SHAPES:
-            s = rx.sub(lambda m, k=kind: self.tag(k, m.group(0)), s)
+            s = rx.sub(self._tagger(kind), s)
         return self._kv_scan(s)
+
+    def _tagger(self, kind: str) -> Callable[[re.Match[str]], str]:
+        """A replacement function that tags the whole match as `kind`."""
+        return lambda m: self.tag(kind, m.group(0))
 
     def _kv_scan(self, s: str) -> str:
         """Redact the value of every sensitive `name<sep>value`. After a NON-sensitive pair, resume scanning
@@ -145,6 +158,9 @@ class Redactor:
 
     # ---- structured places
     def header(self, name: str, value: str) -> str:
+        """Redact one header value by its name: cookies and authorization credentials are tagged, other sensitive names
+        are tagged whole, URLs in location-style headers are redacted as URLs, and everything else is scanned as
+        text."""
         ln = name.lower()
         if ln == "cookie":
             return "; ".join(self._cookie_pair(p) for p in value.split(";"))
@@ -162,10 +178,12 @@ class Redactor:
         k, eq, v = pair.strip().partition("=")
         return f"{k}{eq}{self.tag('cookie', v)}" if eq and v else pair.strip()
 
-    def headers(self, items) -> list[list[str]]:
+    def headers(self, items: Iterable[tuple[str, str]]) -> list[list[str]]:
+        """Redact a message's headers, keeping their order, as [name, value] pairs."""
         return [[k, self.header(k, v)] for k, v in items]
 
     def url(self, u: str) -> str:
+        """Redact a URL: sensitive query values are tagged, then the whole URL is scanned as text."""
         base, q, rest = u.partition("?")
         if q:
             query, h, frag = rest.partition("#")
@@ -176,7 +194,7 @@ class Redactor:
             u = base + q + "&".join(parts) + h + frag
         return self.text(u)
 
-    def json_value(self, obj, key: str | None = None):
+    def json_value(self, obj: Any, key: str | None = None) -> Any:
         """Structure-aware: a sensitive key redacts its STRING value (numbers/bools/null are not secrets)."""
         if isinstance(obj, dict):
             return {k: self.json_value(v, k) for k, v in obj.items()}
@@ -205,6 +223,8 @@ class Redactor:
         return "\n".join(out)
 
     def body_text(self, content_type: str, text: str) -> str:
+        """Redact a body's text by its content type: JSON by structure, event streams and JSON lines line by line,
+        anything else as free text."""
         ct = (content_type or "").lower()
         if "event-stream" in ct:
             return self._json_lines(text, "data:")
@@ -228,7 +248,7 @@ class Redactor:
             )
         return self.text(text)
 
-    def body(self, content_type: str, raw_size: int, get_text, cap: int) -> dict:
+    def body(self, content_type: str, raw_size: int, get_text: Callable[[], str], cap: int) -> dict:
         """Capture record for a message body. Redact FIRST, truncate AFTER, so a cut can never expose a
         prefix of a raw secret. Non-text and oversized bodies are described, never stored."""
         out = {"size": raw_size, "content_type": content_type or None}
@@ -243,6 +263,8 @@ class Redactor:
 
     # ---- argv / env / tracee
     def argv(self, argv: list[str]) -> list[str]:
+        """Redact a command line: the value of a credential flag (`--token x` or `--password=x`) is tagged, and every
+        other argument is scanned as text."""
         out, redact_next = [], False
         for a in argv:
             if redact_next:
@@ -262,12 +284,16 @@ class Redactor:
         return out
 
     def env_entry(self, entry: str) -> str:
+        """Redact one `NAME=value` environment entry: the value is tagged when the name looks sensitive, otherwise the
+        entry is scanned as text."""
         k, eq, v = entry.partition("=")
         if eq and name_is_sensitive(k):
             return f"{k}={self.tag('env', v)}"
         return self.text(entry)
 
     def tracee_event(self, ev: dict) -> dict:
+        """Redact a parsed Tracee event in place: its argv and env arguments element by element, and its other string
+        arguments as text."""
         for a in ev.get("args", []):
             v = a.get("value")
             if a.get("name") == "argv" and isinstance(v, list):

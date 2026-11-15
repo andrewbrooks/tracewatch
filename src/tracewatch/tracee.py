@@ -8,6 +8,7 @@ import os
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .log import log_unexpected
@@ -63,7 +64,7 @@ _BASE = [
 
 def image_info() -> dict:
     """Digest and reported version of the Tracee image actually used (provenance for the manifest)."""
-    info = {"image": IMAGE}
+    info: dict[str, str | None] = {"image": IMAGE}
     r = subprocess.run(
         ["docker", "image", "inspect", IMAGE, "--format", "{{index .RepoDigests 0}}"], capture_output=True, text=True
     )
@@ -88,6 +89,7 @@ def image_info() -> dict:
 
 
 def docker_run(run_id: str, name: str, tracee_args: list[str]) -> None:
+    """Start the Tracee container, detached and labelled with the run id."""
     subprocess.run(
         ["docker", "run", "-d", "--name", name, "--label", f"tracewatch.run={run_id}", *_BASE, IMAGE, *tracee_args],
         check=True,
@@ -96,6 +98,7 @@ def docker_run(run_id: str, name: str, tracee_args: list[str]) -> None:
 
 
 def first_event(name: str, timeout: float = 90) -> dict | None:
+    """Wait up to `timeout` seconds for the container's first event and return it parsed, or None."""
     end = time.time() + timeout
     while time.time() < end:
         out = subprocess.run(["docker", "logs", name], capture_output=True, text=True).stdout
@@ -119,19 +122,25 @@ def bootstrap_host_pid(run_id: str, timeout: float = 90) -> int | None:
 
 
 def container_running(name: str) -> bool:
+    """Whether the named container is running."""
     r = subprocess.run(["docker", "inspect", "-f", "{{.State.Running}}", name], capture_output=True, text=True)
     return r.stdout.strip() == "true"
 
 
 def stop_and_remove(name: str, grace: int = 3) -> None:
+    """Stop the container, giving it `grace` seconds. Despite the name this does not remove it; callers call `remove`
+    afterwards."""
     subprocess.run(["docker", "stop", "-t", str(grace), name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def remove(name: str) -> None:
+    """Force-remove the container, ignoring failures."""
     subprocess.run(["docker", "rm", "-f", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def scoped_args(host_pid: int, file_patterns: list[str] | None = None) -> list[str]:
+    """Tracee's arguments for one run: the events to record, file-open events for the watched paths, and a scope limited
+    to the target's process tree (by host pid), as JSON."""
     pats = file_watch_patterns() if file_patterns is None else file_patterns
     args = ["--events", EVENTS, "--events", SEND_EVENTS]
     for w in WRITE_EVENTS:
@@ -174,11 +183,11 @@ class Collector(threading.Thread):
         tracee_args: list[str],
         out: Path,
         err: Path,
-        transform=None,
+        transform: Callable[[bytes], bytes] | None = None,
         max_bytes: int | None = None,
-        keep=None,
-        tap=None,
-    ):
+        keep: Callable[[bytes], bool] | None = None,
+        tap: Callable[[bytes], None] | None = None,
+    ) -> None:
         super().__init__(daemon=True, name="tracee-collector")
         self.run_id, self.container, self.tracee_args = run_id, container, tracee_args
         self.out, self.err = out, err
@@ -201,6 +210,8 @@ class Collector(threading.Thread):
         self.error: str | None = None
 
     def run(self) -> None:
+        """Thread body: run the Tracee client and read its output line by line, filter and redact each line, and append
+        the kept ones to the output file within the size cap. A failure is recorded in `error`."""
         try:
             self.proc = subprocess.Popen(
                 [
@@ -226,6 +237,8 @@ class Collector(threading.Thread):
             )
             fd = os.open(self.out, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
             last_sync = time.monotonic()
+            if self.proc.stdout is None:  # stdout=PIPE above, so this only guards the invariant
+                raise RuntimeError("the Tracee client was started without a stdout pipe")
             for line in iter(self.proc.stdout.readline, b""):
                 data = line if line.endswith(b"\n") else line + b"\n"
                 if self.watch_exit_pid is not None and self.exit_seen_at is None and self._is_exit(data):
@@ -269,8 +282,12 @@ class Collector(threading.Thread):
             log_unexpected(logger, "tracee collector", e)
 
     def _is_exit(self, line: bytes) -> bool:
-        return b'"eventName":"sched_process_exit"' in line and b'"processId":%d,' % self.watch_exit_pid in line
+        pid = self.watch_exit_pid
+        if pid is None:
+            return False
+        return b'"eventName":"sched_process_exit"' in line and b'"processId":%d,' % pid in line
 
     def stop(self) -> None:
+        """Kill the Tracee client if it is still running."""
         if self.proc and self.proc.poll() is None:
             self.proc.kill()

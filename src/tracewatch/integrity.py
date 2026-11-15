@@ -23,6 +23,7 @@ import ipaddress
 import json
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 from .plural import pl
 from .procinfo import same_process
@@ -140,9 +141,8 @@ def _gaps_and_caps(out: dict, ev: list[dict], beats: list[dict], losses: list[st
     end = out.get("end_mono")
     for e in ev:
         if e["kind"] == "component_died":
-            src = {"mitm": "proxy", "tracee": "tracee", "tracee-collector": "tracee"}.get(
-                e.get("component"), e.get("component")
-            )
+            names: dict[str | None, str | None] = {"mitm": "proxy", "tracee": "tracee", "tracee-collector": "tracee"}
+            src = names.get(e.get("component"), e.get("component"))
             out["gaps"].append(
                 {"source": src, "start_mono": e["t_mono_ns"], "end_mono": end, "reason": f"{e.get('component')} died"}
             )
@@ -177,7 +177,8 @@ def _gaps_and_caps(out: dict, ev: list[dict], beats: list[dict], losses: list[st
 def _bypassed_proxy(out: dict, m: dict, tracee_recs: list[dict], losses: list[str]) -> None:
     """TCP connections the kernel saw that never went to the proxy (loopback ones are only noted)."""
     proxy_port = m.get("proxy_port")
-    direct: dict[tuple[str, int], dict] = defaultdict(lambda: {"count": 0, "pids": set()})
+    # keyed by (destination, port exactly as Tracee reported it)
+    direct: dict[tuple[str, Any], dict] = defaultdict(lambda: {"count": 0, "pids": set()})
     for e in tracee_recs:
         if e.get("eventName") != "net_tcp_connect":
             continue

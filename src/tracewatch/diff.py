@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Iterable
 
 from .report_md import code, table, txt
 
@@ -35,13 +36,13 @@ def _set_diff(a: dict, b: dict) -> dict:
     }
 
 
-def _commands(m):
+def _commands(m: dict) -> dict[str, dict]:
     c = Counter(norm(p["cmdline"]) for p in m["processes"])
     return {k: {"count": n} for k, n in c.items()}
 
 
-def _destinations(m):
-    out = {}
+def _destinations(m: dict) -> dict[str, dict]:
+    out: dict[str, dict] = {}
     for d in m["destinations"]:
         k = f"{d['name'] or d['ip']}:{d['port']}"
         o = out.setdefault(k, {"via": d["via"], "requests": 0, "errors": 0, "ip": d["ip"]})
@@ -52,8 +53,8 @@ def _destinations(m):
     return out
 
 
-def _http(m):
-    out = {}
+def _http(m: dict) -> dict[str, dict]:
+    out: dict[str, dict] = {}
     for h in m["http"]:
         k = f"{h['method']} {h['scheme']}://{h['host']}{norm(h['path'])}"
         o = out.setdefault(k, {"count": 0, "status": Counter()})
@@ -62,7 +63,7 @@ def _http(m):
     return out
 
 
-def _files(m):
+def _files(m: dict) -> dict[str, dict]:
     out = {}
     for e in m["events"]:
         if e["kind"] == "file":
@@ -71,8 +72,8 @@ def _files(m):
     return out
 
 
-def _findings(m):
-    out = {}
+def _findings(m: dict) -> dict[str, dict]:
+    out: dict[str, dict] = {}
     for f in m["findings"]:
         k = f"{f['rule']}: {norm(f['title'])}"
         o = out.setdefault(k, {"severity": f["severity"], "count": 0})
@@ -82,11 +83,11 @@ def _findings(m):
     return out
 
 
-def _dns(m):
+def _dns(m: dict) -> dict[str, dict]:
     return {d["name"]: {"ips": d["ips"]} for d in m["dns"]["resolved"] if not d.get("ip_literal")}
 
 
-def _changed(a: dict, b: dict, fields) -> list[dict]:
+def _changed(a: dict, b: dict, fields: Iterable[str]) -> list[dict]:
     out = []
     for k in sorted(a.keys() & b.keys()):
         delta = {f: [a[k][f], b[k][f]] for f in fields if a[k].get(f) != b[k].get(f)}
@@ -153,7 +154,7 @@ def compare(a: dict, b: dict) -> dict:
     }
 
 
-def _runinfo(m):
+def _runinfo(m: dict) -> dict:
     r = m["run"]
     return {
         "id": r["id"],
@@ -165,15 +166,16 @@ def _runinfo(m):
 
 
 # ----------------------------------------------------------------------------------------------- markdown
-def _counts(s):
+def _counts(s: dict) -> str:
     return f"+{len(s['added'])} / -{len(s['removed'])}" + (f" / ~{len(s['changed'])}" if s.get("changed") else "")
 
 
-def _dl(delta):
+def _dl(delta: dict) -> str:
     return ", ".join(f"{k}: {code(v[0], 40)} → {code(v[1], 40)}" for k, v in delta.items())
 
 
 def render_md(d: dict) -> str:
+    """A diff result (from `compare`) as Markdown: the notable changes first, then a section for each kind of change."""
     b, a = d["before"], d["after"]
     o = ["# tracewatch diff\n"]
     o.append(f"- before: {code(b['id'])} {code(b['cmdline'], 100)} ({b['verdict']}, {b['duration_ns'] / 1e9:.1f}s)")
@@ -216,5 +218,5 @@ def render_md(d: dict) -> str:
     return "\n".join(o)
 
 
-def _extra(it):
+def _extra(it: dict) -> str:
     return ", ".join(f"{k}={v}" for k, v in it.items() if k != "key" and v not in (None, "", [], {}))

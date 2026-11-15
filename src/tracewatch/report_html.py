@@ -49,6 +49,8 @@ def embed_json(model: dict) -> str:
 
 
 def read_assets() -> tuple[str, str]:
+    """The report page's CSS and JavaScript, read from the package. Refuses an asset that contains a closing tag that
+    would end its enclosing element early."""
     css = (ASSETS / "style.css").read_text()
     js = "\n".join(p.read_text() for p in sorted((ASSETS / "js").glob("*.js")))
     for name, text, bad in (("style.css", css, "</style"), ("js", js, "</script")):
@@ -58,6 +60,8 @@ def read_assets() -> tuple[str, str]:
 
 
 def render(model: dict) -> str:
+    """A model as the interactive HTML report: one self-contained page with its CSS and JavaScript inline, and scripts
+    restricted by a per-render CSP nonce."""
     css, js = read_assets()
     nonce = secrets.token_urlsafe(18)
     title = "tracewatch: " + (model["run"].get("cmdline") or model["run"].get("id") or "report")[:90]

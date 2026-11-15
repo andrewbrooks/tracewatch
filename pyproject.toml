@@ -70,28 +70,17 @@ select = ["E", "F", "I", "UP", "B"]
 [tool.mypy]
 python_version = "3.12"
 files = ["src"]
+# Every function is annotated and its body is checked. Keep it that way: add types to new code, do not loosen these.
+disallow_untyped_defs = true
+check_untyped_defs = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 
-# Third-party packages that ship no type information.
+# Third-party packages that ship no type information, or that are installed only on some Pythons (the zstd backport
+# exists before Python 3.14; from 3.14 zstd is in the standard library).
 [[tool.mypy.overrides]]
-module = ["brotli"]
+module = ["brotli", "backports", "backports.zstd"]
 ignore_missing_imports = true
-
-# Baseline: these modules had type errors when mypy was first added (48 in all, mostly attributes
-# reached through an Optional). They are skipped for now so the check can gate new code at once.
-# Remove a module from this list when it is clean; never add one. Modules not listed are fully checked.
-[[tool.mypy.overrides]]
-module = [
-  "tracewatch.recorder",
-  "tracewatch.proxy_addon",
-  "tracewatch.tracee",
-  "tracewatch.integrity",
-  "tracewatch.redact",
-  "tracewatch.model",
-  "tracewatch.findings_catalog",
-]
-ignore_errors = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
