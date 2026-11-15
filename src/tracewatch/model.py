@@ -274,71 +274,95 @@ def _align_clocks(
     return info, _Clock(offset, source, t0)
 
 
+class _KernelReader:
+    """Turns Tracee events into timeline entries, one method per kind of event. It also keeps what the model needs
+    besides the entries: how many connects went to the proxy, how often the CA was loaded, and which UDP connects
+    were only lookup probes."""
+
+    def __init__(self, by_eid: dict, t0: int, proxy_port: int | None, ca_path: str, tl: _Timeline) -> None:
+        self.by_eid, self.t0, self.proxy_port, self.ca_path, self.tl = by_eid, t0, proxy_port, ca_path, tl
+        self.dns_probe_until: dict[int, int] = {}  # eid -> abs ts until which UDP connects are lookup probes
+        self.ca_loads = 0
+        self.proxy_connects = 0
+        self.udp_probes: Counter[Any] = Counter()
+
+    def read(self, e: dict) -> None:
+        """Add the timeline entry for one event, if it is a kind the model shows."""
+        handler = {
+            "sched_process_exec": self._exec,
+            "sched_process_exit": self._exit,
+            "net_tcp_connect": self._tcp,
+            "security_socket_connect": self._socket_connect,
+            "security_file_open": self._file_open,
+        }.get(e["eventName"])
+        if handler is not None:
+            handler(e, self.by_eid.get(e["processEntityId"]), e["timestamp"] - self.t0, _args(e))
+
+    def _exec(self, e: dict, p: dict | None, t: int, a: dict) -> None:
+        argv = [str(x) for x in (a.get("argv") or [])]
+        self.tl.add(
+            t, "exec", p, cmdline(argv) or a.get("pathname", "?"), exe=a.get("pathname"), argv=argv, cwd=a.get("pwd")
+        )
+
+    def _exit(self, e: dict, p: dict | None, t: int, a: dict) -> None:
+        if a.get("process_group_exit"):
+            x = decode_exit(a)
+            self.tl.add(t, "exit", p, x["status"], **x)
+
+    def _tcp(self, e: dict, p: dict | None, t: int, a: dict) -> None:
+        dst, port = a.get("dst"), a.get("dst_port")
+        if port == self.proxy_port:
+            self.proxy_connects += 1
+            return
+        self.tl.add(t, "tcp", p, f"{dst}:{port}", dst=dst, port=port, loopback=_is_loopback(str(dst)))
+
+    def _socket_connect(self, e: dict, p: dict | None, t: int, a: dict) -> None:
+        ra = a.get("remote_addr") or {}
+        fam, typ = ra.get("sa_family"), a.get("type")
+        if fam == "AF_UNIX":
+            self._unix_connect(e, p, t, ra)
+        elif fam in ("AF_INET", "AF_INET6") and typ == 2:
+            self._udp_connect(e, p, t, ra)
+
+    def _unix_connect(self, e: dict, p: dict | None, t: int, ra: dict) -> None:
+        path = ra.get("sun_path", "")
+        res = RESOLVER_SOCKETS.get(path)
+        if res and p:
+            self.dns_probe_until[p["_eid"]] = e["timestamp"] + PROBE_WINDOW_NS
+        if res:
+            self.tl.add_resolver(t, p, res, f"lookup via {res}", path=path)
+        else:
+            self.tl.add(t, "unix", p, path or "(abstract)", path=path)
+
+    def _udp_connect(self, e: dict, p: dict | None, t: int, ra: dict) -> None:
+        ip = ra.get("sin_addr") or ra.get("sin6_addr")
+        port = int(ra.get("sin_port") or ra.get("sin6_port") or 0)
+        if port == 53 and p:
+            self.dns_probe_until[p["_eid"]] = e["timestamp"] + PROBE_WINDOW_NS
+            self.tl.add_resolver(t, p, f"{ip}:53", f"query sent to resolver {ip}", ip=ip)
+        else:
+            probe = bool(p and e["timestamp"] <= self.dns_probe_until.get(p["_eid"], 0))
+            if probe:
+                self.udp_probes[p["id"] if p else None] += 1
+            self.tl.add(t, "udp", p, f"{ip}:{port}", "probe" if probe else None, dst=ip, port=port, probe=probe)
+
+    def _file_open(self, e: dict, p: dict | None, t: int, a: dict) -> None:
+        path = a.get("pathname") or a.get("syscall_pathname") or ""
+        if path == self.ca_path:
+            self.ca_loads += 1
+            return
+        mode = decode_open_flags(int(a.get("flags") or 0))
+        self.tl.add(t, "file", p, f"{mode} {path}", mode, path=path, mode=mode, category=classify_path(path))
+
+
 def _kernel_events(
     tr: list[dict], by_eid: dict, t0: int, proxy_port: int | None, ca_path: str, tl: _Timeline
 ) -> _Kernel:
     """Tracee events -> timeline entries (exec, exit, tcp, unix, udp, resolver contacts, watched file opens)."""
-    dns_probe_until: dict[int, int] = {}  # eid -> abs ts until which UDP connects are lookup probes
-    ca_loads = 0
-    proxy_connects = 0
-    udp_probes: Counter[Any] = Counter()
+    reader = _KernelReader(by_eid, t0, proxy_port, ca_path, tl)
     for e in sorted(tr, key=lambda x: x["timestamp"]):
-        p = by_eid.get(e["processEntityId"])
-        t = e["timestamp"] - t0
-        a = _args(e)
-        name = e["eventName"]
-        if name == "sched_process_exec":
-            argv = [str(x) for x in (a.get("argv") or [])]
-            tl.add(
-                t,
-                "exec",
-                p,
-                cmdline(argv) or a.get("pathname", "?"),
-                exe=a.get("pathname"),
-                argv=argv,
-                cwd=a.get("pwd"),
-            )
-        elif name == "sched_process_exit":
-            if a.get("process_group_exit"):
-                x = decode_exit(a)
-                tl.add(t, "exit", p, x["status"], **x)
-        elif name == "net_tcp_connect":
-            dst, port = a.get("dst"), a.get("dst_port")
-            if port == proxy_port:
-                proxy_connects += 1
-                continue
-            tl.add(t, "tcp", p, f"{dst}:{port}", dst=dst, port=port, loopback=_is_loopback(str(dst)))
-        elif name == "security_socket_connect":
-            ra = a.get("remote_addr") or {}
-            fam, typ = ra.get("sa_family"), a.get("type")
-            if fam == "AF_UNIX":
-                path = ra.get("sun_path", "")
-                res = RESOLVER_SOCKETS.get(path)
-                if res and p:
-                    dns_probe_until[p["_eid"]] = e["timestamp"] + PROBE_WINDOW_NS
-                if res:
-                    tl.add_resolver(t, p, res, f"lookup via {res}", path=path)
-                else:
-                    tl.add(t, "unix", p, path or "(abstract)", path=path)
-            elif fam in ("AF_INET", "AF_INET6") and typ == 2:
-                ip = ra.get("sin_addr") or ra.get("sin6_addr")
-                port = int(ra.get("sin_port") or ra.get("sin6_port") or 0)
-                if port == 53 and p:
-                    dns_probe_until[p["_eid"]] = e["timestamp"] + PROBE_WINDOW_NS
-                    tl.add_resolver(t, p, f"{ip}:53", f"query sent to resolver {ip}", ip=ip)
-                else:
-                    probe = bool(p and e["timestamp"] <= dns_probe_until.get(p["_eid"], 0))
-                    if probe:
-                        udp_probes[p["id"] if p else None] += 1
-                    tl.add(t, "udp", p, f"{ip}:{port}", "probe" if probe else None, dst=ip, port=port, probe=probe)
-        elif name == "security_file_open":
-            path = a.get("pathname") or a.get("syscall_pathname") or ""
-            if path == ca_path:
-                ca_loads += 1
-                continue
-            mode = decode_open_flags(int(a.get("flags") or 0))
-            tl.add(t, "file", p, f"{mode} {path}", mode, path=path, mode=mode, category=classify_path(path))
-    return _Kernel(ca_loads, proxy_connects, udp_probes)
+        reader.read(e)
+    return _Kernel(reader.ca_loads, reader.proxy_connects, reader.udp_probes)
 
 
 class _ProxyIndex:
