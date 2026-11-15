@@ -11,14 +11,8 @@ from .sweep import sweep_runs
 DEFAULT_RUNS = "out/runs"
 
 
-def main(argv: list[str] | None = None) -> int:
-    """Run the command line and return the exit status. 0 is success. `verify` returns its verdict code (0 complete up
-    to 4 unreadable), `diff` returns 1 when behavior changed, `sweep` returns 1 if any cleanup failed, and a path
-    that is not a run directory gives 2."""
-    p = argparse.ArgumentParser(prog="tracewatch", description="Flight recorder for a launched process.")
-    p.add_argument("-v", "--verbose", action="store_true", help="also show debug diagnostics on stderr")
-    sub = p.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("record", help="run a command under the recorder; recording ends when it exits")
+def _add_record_arguments(r: argparse.ArgumentParser) -> None:
+    """The options of `record`: where runs go, the proxy port, the size caps and what happens on component loss."""
     r.add_argument("--out", default=DEFAULT_RUNS, help=f"runs directory (default {DEFAULT_RUNS})")
     r.add_argument("--port", type=int, help="proxy port (default: a free one)")
     r.add_argument("--upstream-ca", help="extra CA the proxy trusts for upstream servers (testing)")
@@ -45,6 +39,16 @@ def main(argv: list[str] | None = None) -> int:
     r.add_argument("--ws-msg-cap", type=int, default=2048, help="stored characters per websocket message")
     r.add_argument("--quiet", action="store_true")
     r.add_argument("argv", nargs=argparse.REMAINDER, help="-- command [args...]")
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    """The command-line parser: a global --verbose and the record, verify, report, diff and sweep commands."""
+    p = argparse.ArgumentParser(prog="tracewatch", description="Flight recorder for a launched process.")
+    p.add_argument("-v", "--verbose", action="store_true", help="also show debug diagnostics on stderr")
+    sub = p.add_subparsers(dest="cmd", required=True)
+    _add_record_arguments(
+        sub.add_parser("record", help="run a command under the recorder; recording ends when it exits")
+    )
     v = sub.add_parser("verify", help="what can be trusted in a run directory (exit 0 complete .. 4 unreadable)")
     v.add_argument("run_dir")
     v.add_argument("--json", action="store_true")
@@ -61,49 +65,56 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("sweep", help="finalize runs whose recorder died, remove leaked containers/proxies")
     s.add_argument("--out", default=DEFAULT_RUNS)
     s.add_argument("--dry-run", action="store_true", help="say what would be swept and changed, without changing it")
-    a = p.parse_args(argv)
-    configure_logging(a.verbose)
-    if a.cmd == "report":
-        return _report(a)
-    if a.cmd == "diff":
-        return _diff(a)
-    if a.cmd == "verify":
-        import json
+    return p
 
-        from .integrity import EXIT_CODES, assess
 
-        res = assess(Path(a.run_dir))
-        if a.json:
-            print(json.dumps(res, indent=1))
-        else:
-            print(f"{res['verdict'].upper()}: {a.run_dir}")
-            for r in res["reasons"]:
-                print(f"  - {r}")
-            for g in res["gaps"]:
-                print(f"  gap: {g['source']}: {g['reason']}")
-            for u in res.get("unproxied", []):
-                where = f"{u['dst']}:{u['port']} x{u['count']} by pid(s) {u['pids']}"
-                print(f"  BYPASSED THE PROXY (content not recorded): {where}")
-            if res.get("unproxied_local"):
-                n = sum(u["count"] for u in res["unproxied_local"])
-                print(f"  note: {n} loopback connection(s) did not use the proxy")
-            if res.get("target_stopped"):
-                print(f"  the recorder stopped the target: {res['target_stopped']['reason']}")
-            if res.get("untrusted_after_mono"):
-                print("  data after the last heartbeat is untrusted (the recorder was dead)")
-        return EXIT_CODES[res["verdict"]]
-    if a.cmd == "sweep":
-        report = sweep_runs(Path(a.out), dry_run=a.dry_run)
-        print(f"{'would sweep' if a.dry_run else 'swept'} {len(report.swept)} run(s)")
-        if report.problems:  # each one was already logged as a warning, with its run
-            print(
-                f"tracewatch: {len(report.problems)} problem(s) during the sweep (see the warnings above)",
-                file=sys.stderr,
-            )
-        return 1 if report.problems else 0
+def _print_verdict(res: dict, run_dir: str) -> None:
+    """The `verify` result as text: the verdict, then the reasons, gaps and anything that bypassed the proxy."""
+    print(f"{res['verdict'].upper()}: {run_dir}")
+    for reason in res["reasons"]:
+        print(f"  - {reason}")
+    for gap in res["gaps"]:
+        print(f"  gap: {gap['source']}: {gap['reason']}")
+    for u in res.get("unproxied", []):
+        where = f"{u['dst']}:{u['port']} x{u['count']} by pid(s) {u['pids']}"
+        print(f"  BYPASSED THE PROXY (content not recorded): {where}")
+    if res.get("unproxied_local"):
+        n = sum(u["count"] for u in res["unproxied_local"])
+        print(f"  note: {n} loopback connection(s) did not use the proxy")
+    if res.get("target_stopped"):
+        print(f"  the recorder stopped the target: {res['target_stopped']['reason']}")
+    if res.get("untrusted_after_mono"):
+        print("  data after the last heartbeat is untrusted (the recorder was dead)")
+
+
+def _verify(a: argparse.Namespace) -> int:
+    import json
+
+    from .integrity import EXIT_CODES, assess
+
+    res = assess(Path(a.run_dir))
+    if a.json:
+        print(json.dumps(res, indent=1))
+    else:
+        _print_verdict(res, a.run_dir)
+    return EXIT_CODES[res["verdict"]]
+
+
+def _sweep(a: argparse.Namespace) -> int:
+    report = sweep_runs(Path(a.out), dry_run=a.dry_run)
+    print(f"{'would sweep' if a.dry_run else 'swept'} {len(report.swept)} run(s)")
+    if report.problems:  # each one was already logged as a warning, with its run
+        print(
+            f"tracewatch: {len(report.problems)} problem(s) during the sweep (see the warnings above)",
+            file=sys.stderr,
+        )
+    return 1 if report.problems else 0
+
+
+def _record(a: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
     cmd = a.argv[1:] if a.argv and a.argv[0] == "--" else a.argv
     if not cmd:
-        p.error("record needs a command after --")
+        parser.error("record needs a command after --")
     return record(
         Options(
             argv=cmd,
@@ -124,6 +135,24 @@ def main(argv: list[str] | None = None) -> int:
             ws_msg_cap=a.ws_msg_cap,
         )
     )
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the command line and return the exit status. 0 is success. `verify` returns its verdict code (0 complete up
+    to 4 unreadable), `diff` returns 1 when behavior changed, `sweep` returns 1 if any cleanup failed, and a path
+    that is not a run directory gives 2."""
+    parser = _build_parser()
+    a = parser.parse_args(argv)
+    configure_logging(a.verbose)
+    if a.cmd == "report":
+        return _report(a)
+    if a.cmd == "diff":
+        return _diff(a)
+    if a.cmd == "verify":
+        return _verify(a)
+    if a.cmd == "sweep":
+        return _sweep(a)
+    return _record(a, parser)
 
 
 def _diff(a: argparse.Namespace) -> int:

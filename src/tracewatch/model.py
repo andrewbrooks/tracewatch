@@ -274,71 +274,95 @@ def _align_clocks(
     return info, _Clock(offset, source, t0)
 
 
+class _KernelReader:
+    """Turns Tracee events into timeline entries, one method per kind of event. It also keeps what the model needs
+    besides the entries: how many connects went to the proxy, how often the CA was loaded, and which UDP connects
+    were only lookup probes."""
+
+    def __init__(self, by_eid: dict, t0: int, proxy_port: int | None, ca_path: str, tl: _Timeline) -> None:
+        self.by_eid, self.t0, self.proxy_port, self.ca_path, self.tl = by_eid, t0, proxy_port, ca_path, tl
+        self.dns_probe_until: dict[int, int] = {}  # eid -> abs ts until which UDP connects are lookup probes
+        self.ca_loads = 0
+        self.proxy_connects = 0
+        self.udp_probes: Counter[Any] = Counter()
+
+    def read(self, e: dict) -> None:
+        """Add the timeline entry for one event, if it is a kind the model shows."""
+        handler = {
+            "sched_process_exec": self._exec,
+            "sched_process_exit": self._exit,
+            "net_tcp_connect": self._tcp,
+            "security_socket_connect": self._socket_connect,
+            "security_file_open": self._file_open,
+        }.get(e["eventName"])
+        if handler is not None:
+            handler(e, self.by_eid.get(e["processEntityId"]), e["timestamp"] - self.t0, _args(e))
+
+    def _exec(self, e: dict, p: dict | None, t: int, a: dict) -> None:
+        argv = [str(x) for x in (a.get("argv") or [])]
+        self.tl.add(
+            t, "exec", p, cmdline(argv) or a.get("pathname", "?"), exe=a.get("pathname"), argv=argv, cwd=a.get("pwd")
+        )
+
+    def _exit(self, e: dict, p: dict | None, t: int, a: dict) -> None:
+        if a.get("process_group_exit"):
+            x = decode_exit(a)
+            self.tl.add(t, "exit", p, x["status"], **x)
+
+    def _tcp(self, e: dict, p: dict | None, t: int, a: dict) -> None:
+        dst, port = a.get("dst"), a.get("dst_port")
+        if port == self.proxy_port:
+            self.proxy_connects += 1
+            return
+        self.tl.add(t, "tcp", p, f"{dst}:{port}", dst=dst, port=port, loopback=_is_loopback(str(dst)))
+
+    def _socket_connect(self, e: dict, p: dict | None, t: int, a: dict) -> None:
+        ra = a.get("remote_addr") or {}
+        fam, typ = ra.get("sa_family"), a.get("type")
+        if fam == "AF_UNIX":
+            self._unix_connect(e, p, t, ra)
+        elif fam in ("AF_INET", "AF_INET6") and typ == 2:
+            self._udp_connect(e, p, t, ra)
+
+    def _unix_connect(self, e: dict, p: dict | None, t: int, ra: dict) -> None:
+        path = ra.get("sun_path", "")
+        res = RESOLVER_SOCKETS.get(path)
+        if res and p:
+            self.dns_probe_until[p["_eid"]] = e["timestamp"] + PROBE_WINDOW_NS
+        if res:
+            self.tl.add_resolver(t, p, res, f"lookup via {res}", path=path)
+        else:
+            self.tl.add(t, "unix", p, path or "(abstract)", path=path)
+
+    def _udp_connect(self, e: dict, p: dict | None, t: int, ra: dict) -> None:
+        ip = ra.get("sin_addr") or ra.get("sin6_addr")
+        port = int(ra.get("sin_port") or ra.get("sin6_port") or 0)
+        if port == 53 and p:
+            self.dns_probe_until[p["_eid"]] = e["timestamp"] + PROBE_WINDOW_NS
+            self.tl.add_resolver(t, p, f"{ip}:53", f"query sent to resolver {ip}", ip=ip)
+        else:
+            probe = bool(p and e["timestamp"] <= self.dns_probe_until.get(p["_eid"], 0))
+            if probe:
+                self.udp_probes[p["id"] if p else None] += 1
+            self.tl.add(t, "udp", p, f"{ip}:{port}", "probe" if probe else None, dst=ip, port=port, probe=probe)
+
+    def _file_open(self, e: dict, p: dict | None, t: int, a: dict) -> None:
+        path = a.get("pathname") or a.get("syscall_pathname") or ""
+        if path == self.ca_path:
+            self.ca_loads += 1
+            return
+        mode = decode_open_flags(int(a.get("flags") or 0))
+        self.tl.add(t, "file", p, f"{mode} {path}", mode, path=path, mode=mode, category=classify_path(path))
+
+
 def _kernel_events(
     tr: list[dict], by_eid: dict, t0: int, proxy_port: int | None, ca_path: str, tl: _Timeline
 ) -> _Kernel:
     """Tracee events -> timeline entries (exec, exit, tcp, unix, udp, resolver contacts, watched file opens)."""
-    dns_probe_until: dict[int, int] = {}  # eid -> abs ts until which UDP connects are lookup probes
-    ca_loads = 0
-    proxy_connects = 0
-    udp_probes: Counter[Any] = Counter()
+    reader = _KernelReader(by_eid, t0, proxy_port, ca_path, tl)
     for e in sorted(tr, key=lambda x: x["timestamp"]):
-        p = by_eid.get(e["processEntityId"])
-        t = e["timestamp"] - t0
-        a = _args(e)
-        name = e["eventName"]
-        if name == "sched_process_exec":
-            argv = [str(x) for x in (a.get("argv") or [])]
-            tl.add(
-                t,
-                "exec",
-                p,
-                cmdline(argv) or a.get("pathname", "?"),
-                exe=a.get("pathname"),
-                argv=argv,
-                cwd=a.get("pwd"),
-            )
-        elif name == "sched_process_exit":
-            if a.get("process_group_exit"):
-                x = decode_exit(a)
-                tl.add(t, "exit", p, x["status"], **x)
-        elif name == "net_tcp_connect":
-            dst, port = a.get("dst"), a.get("dst_port")
-            if port == proxy_port:
-                proxy_connects += 1
-                continue
-            tl.add(t, "tcp", p, f"{dst}:{port}", dst=dst, port=port, loopback=_is_loopback(str(dst)))
-        elif name == "security_socket_connect":
-            ra = a.get("remote_addr") or {}
-            fam, typ = ra.get("sa_family"), a.get("type")
-            if fam == "AF_UNIX":
-                path = ra.get("sun_path", "")
-                res = RESOLVER_SOCKETS.get(path)
-                if res and p:
-                    dns_probe_until[p["_eid"]] = e["timestamp"] + PROBE_WINDOW_NS
-                if res:
-                    tl.add_resolver(t, p, res, f"lookup via {res}", path=path)
-                else:
-                    tl.add(t, "unix", p, path or "(abstract)", path=path)
-            elif fam in ("AF_INET", "AF_INET6") and typ == 2:
-                ip = ra.get("sin_addr") or ra.get("sin6_addr")
-                port = int(ra.get("sin_port") or ra.get("sin6_port") or 0)
-                if port == 53 and p:
-                    dns_probe_until[p["_eid"]] = e["timestamp"] + PROBE_WINDOW_NS
-                    tl.add_resolver(t, p, f"{ip}:53", f"query sent to resolver {ip}", ip=ip)
-                else:
-                    probe = bool(p and e["timestamp"] <= dns_probe_until.get(p["_eid"], 0))
-                    if probe:
-                        udp_probes[p["id"] if p else None] += 1
-                    tl.add(t, "udp", p, f"{ip}:{port}", "probe" if probe else None, dst=ip, port=port, probe=probe)
-        elif name == "security_file_open":
-            path = a.get("pathname") or a.get("syscall_pathname") or ""
-            if path == ca_path:
-                ca_loads += 1
-                continue
-            mode = decode_open_flags(int(a.get("flags") or 0))
-            tl.add(t, "file", p, f"{mode} {path}", mode, path=path, mode=mode, category=classify_path(path))
-    return _Kernel(ca_loads, proxy_connects, udp_probes)
+        reader.read(e)
+    return _Kernel(reader.ca_loads, reader.proxy_connects, reader.udp_probes)
 
 
 class _ProxyIndex:
@@ -641,6 +665,41 @@ def _attach_findings(model: dict) -> None:
     model["stats"]["findings"] = {s: sum(1 for f in model["findings"] if f["severity"] == s) for s in order}
 
 
+def _root_and_run_end(procs: list[dict], ev: list[dict], root_pid: int | None) -> tuple[dict | None, int]:
+    """The target's own process record, and when the run ended: the target's exit if it was seen, else the last thing
+    that happened."""
+    end_t = max([e["t"] for e in ev] + [p["end"] or 0 for p in procs] + [0])
+    root = next((p for p in procs if p["parent"] is None and p["pid"] == root_pid), procs[0] if procs else None)
+    run_end = next((p["end"] for p in procs if root and p["id"] == root["id"] and p["end"] is not None), end_t)
+    return root, run_end
+
+
+def _run_stats(
+    procs: list[dict],
+    ev: list[dict],
+    http: list[dict],
+    websockets: list[dict],
+    destinations: list[dict],
+    dns: dict,
+    kernel: _Kernel,
+    run_end: int,
+) -> dict:
+    """The counts shown at the top of a report and compared by `diff`."""
+    return {
+        "processes": len(procs),
+        "max_depth": max([p["depth"] for p in procs] + [0]),
+        "events": len(ev),
+        "http": len(http),
+        "websockets": len(websockets),
+        "destinations": len(destinations),
+        "dns_names": len(dns["resolved"]),
+        "files": sum(1 for e in ev if e["kind"] == "file"),
+        "proxy_connects": kernel.proxy_connects,
+        "duration_ns": run_end,
+        "commands": sum(1 for e in ev if e["kind"] == "exec"),
+    }
+
+
 def build(run_dir: Path | str) -> dict:
     """Read a run directory and assemble the model. The steps run in a fixed order (the event log is built up in that
     order before it is sorted, so the order is part of the output)."""
@@ -677,9 +736,7 @@ def build(run_dir: Path | str) -> dict:
     destinations = _destinations(http, ev, ip_to_name, procs)
     dns = _dns(ev, resolved, kernel.udp_probes, ip_to_name)
     _count_events_per_process(procs, ev)
-    end_t = max([e["t"] for e in ev] + [p["end"] or 0 for p in procs] + [0])
-    root = next((p for p in procs if p["parent"] is None and p["pid"] == root_pid), procs[0] if procs else None)
-    run_end = next((p["end"] for p in procs if root and p["id"] == root["id"] and p["end"] is not None), end_t)
+    root, run_end = _root_and_run_end(procs, ev, root_pid)
     _closing_notes(notes, manifest, kernel.ca_loads)
 
     model = {
@@ -698,19 +755,7 @@ def build(run_dir: Path | str) -> dict:
         "notes": notes,
         "redactions": manifest.get("redactions") or {},
         "recorder_events": _recorder_events(rec_events, clock),
-        "stats": {
-            "processes": len(procs),
-            "max_depth": max([p["depth"] for p in procs] + [0]),
-            "events": len(ev),
-            "http": len(http),
-            "websockets": len(websockets),
-            "destinations": len(destinations),
-            "dns_names": len(dns["resolved"]),
-            "files": sum(1 for e in ev if e["kind"] == "file"),
-            "proxy_connects": kernel.proxy_connects,
-            "duration_ns": run_end,
-            "commands": sum(1 for e in ev if e["kind"] == "exec"),
-        },
+        "stats": _run_stats(procs, ev, http, websockets, destinations, dns, kernel, run_end),
     }
     _attach_findings(model)
     return model
@@ -742,29 +787,36 @@ def _run_meta(manifest: dict, integ: dict, root: dict | None, run_end: int) -> d
     }
 
 
-def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict]:
+def _new_process_node(e: dict) -> dict:
+    """The record for a process, from the first event seen for it. Underscored fields are working state, dropped
+    before the model is published."""
+    return {
+        "_eid": e["processEntityId"],
+        "_parent_eid": e.get("parentEntityId"),
+        "pid": e["processId"],
+        "ppid": e["parentProcessId"],
+        "uid": e.get("userId"),
+        "name": e.get("processName"),
+        "exe": None,
+        "argv": [],
+        "cwd": None,
+        "execs": [],
+        "_start_raw": e.get("threadStartTime") or e["timestamp"],
+        "end": None,
+        "exit": None,
+        "children": [],
+        "counts": {},
+    }
+
+
+def _read_process_events(tr: list[dict], t0: int) -> dict[int, dict]:
+    """One node per process entity, filled in from its exec and exit events in time order."""
     nodes: dict[int, dict] = {}
     for e in sorted(tr, key=lambda x: x["timestamp"]):
         eid = e["processEntityId"]
         n = nodes.get(eid)
         if n is None:
-            n = nodes[eid] = {
-                "_eid": eid,
-                "_parent_eid": e.get("parentEntityId"),
-                "pid": e["processId"],
-                "ppid": e["parentProcessId"],
-                "uid": e.get("userId"),
-                "name": e.get("processName"),
-                "exe": None,
-                "argv": [],
-                "cwd": None,
-                "execs": [],
-                "_start_raw": e.get("threadStartTime") or e["timestamp"],
-                "end": None,
-                "exit": None,
-                "children": [],
-                "counts": {},
-            }
+            n = nodes[eid] = _new_process_node(e)
         n["_start_raw"] = min(n["_start_raw"], e.get("threadStartTime") or e["timestamp"])
         n["name"] = e.get("processName") or n["name"]
         a = _args(e)
@@ -775,6 +827,11 @@ def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict
         elif e["eventName"] == "sched_process_exit" and a.get("process_group_exit"):
             n["end"] = e["timestamp"] - t0
             n["exit"] = decode_exit(a)
+    return nodes
+
+
+def _finish_nodes(nodes: dict[int, dict], t0: int) -> None:
+    """Start time, command line and display name for each node, now that all its events have been read."""
     for n in nodes.values():
         n["start"] = max(0, n["_start_raw"] - t0)
         n["cmdline"] = cmdline(n["argv"]) if n["argv"] else (n["name"] or "?")
@@ -783,12 +840,19 @@ def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict
             n["name"] = os.path.basename(n["argv"][0].lstrip("-")) or n["name"]  # what was typed: `sh`, not `dash`
         elif n["exe"]:
             n["name"] = os.path.basename(n["exe"])
-    # tree structure
+
+
+def _link_parents(nodes: dict[int, dict]) -> None:
+    """Point each node at its parent node (if the parent was traced) and add it to the parent's children."""
     for n in nodes.values():
         par = nodes.get(n["_parent_eid"])
         n["_parent"] = par if par is not None and par is not n else None
         if n["_parent"] is not None:
             n["_parent"]["children"].append(n)
+
+
+def _order_tree(nodes: dict[int, dict], root_pid: int | None) -> list[dict]:
+    """Depth-first order of the process tree, the target's tree first, with each node's depth set."""
     roots = [n for n in nodes.values() if n["_parent"] is None]
     roots.sort(key=lambda n: (n["pid"] != root_pid, n["start"]))
     ordered: list[dict] = []
@@ -802,7 +866,12 @@ def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict
 
     for r in roots:
         walk(r, 0)
-    for n in ordered:  # a fork that never exec'd is the same program as its parent (a subshell, a worker)
+    return ordered
+
+
+def _inherit_from_parents(ordered: list[dict]) -> None:
+    """A fork that never exec'd is the same program as its parent (a subshell, a worker)."""
+    for n in ordered:
         par = n["_parent"]
         if not n["execs"] and par is not None:
             n["exe"], n["argv"], n["cmdline"], n["cwd"] = (
@@ -812,6 +881,10 @@ def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict
                 n["cwd"] or par["cwd"],
             )
             n["name"], n["forked"] = par["name"], True
+
+
+def _number_processes(ordered: list[dict], root_pid: int | None) -> None:
+    """Give each process its p1, p2, ... id and turn parent and child links into ids."""
     for i, n in enumerate(ordered, 1):
         n["id"] = f"p{i}"
     for n in ordered:
@@ -819,6 +892,16 @@ def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict
         n["detached"] = n["_parent"] is None and n["pid"] != root_pid
         n["children"] = [c["id"] for c in n["children"]]
         n["end_known"] = n["end"] is not None
+
+
+def _build_processes(tr: list[dict], root_pid: int | None, t0: int) -> list[dict]:
+    """The process tree from the Tracee events: one record per process in tree order, with ids p1, p2, ..."""
+    nodes = _read_process_events(tr, t0)
+    _finish_nodes(nodes, t0)
+    _link_parents(nodes)
+    ordered = _order_tree(nodes, root_pid)
+    _inherit_from_parents(ordered)
+    _number_processes(ordered, root_pid)
     return ordered
 
 

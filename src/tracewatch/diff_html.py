@@ -258,37 +258,37 @@ def _hero(d: dict, n_changes: int) -> str:
     )
 
 
-def render(d: dict) -> str:
-    """A diff result as one standalone HTML page, with no script. Everything is escaped, and its CSP allows nothing but
-    its own stylesheet, by a per-render nonce, and no network."""
-    from . import __version__
+def _run_card(label: str, cls: str, r: dict) -> str:
+    """One of the two runs being compared: its command, id, verdict and duration."""
+    return (
+        f'<div class="panel run {cls}"><div class="k">{label}</div><div class="mono">{esc(r["cmdline"])}</div>'
+        f'<div class="muted">run {esc(r["id"])} · {esc(VERDICT_LABEL.get(r["verdict"], r["verdict"]))} · '
+        f"{r['duration_ns'] / 1e9:.1f}s</div></div>"
+    )
 
-    nonce = secrets.token_urlsafe(18)
-    b, a = d["before"], d["after"]
-    n_changes = sum(_count(s) for s in d["sections"].values())
-    widths: set[int] = set()  # bar widths needed -> one CSS class each (the CSP forbids inline style attributes)
 
-    def run_card(label: str, cls: str, r: dict) -> str:
-        return (
-            f'<div class="panel run {cls}"><div class="k">{label}</div><div class="mono">{esc(r["cmdline"])}</div>'
-            f'<div class="muted">run {esc(r["id"])} · {esc(VERDICT_LABEL.get(r["verdict"], r["verdict"]))} · '
-            f"{r['duration_ns'] / 1e9:.1f}s</div></div>"
-        )
+def _notable_panel(d: dict) -> str:
+    """The "What changed" list: up to 15 notable single changes, each tagged with its kind."""
+    if not d["notable"]:
+        return ""
+    shown = d["notable"][:15]
+    items = "".join(
+        f'<li><span class="kind {cls}">{label}</span><span>{esc(n)}</span></li>'
+        for n, (label, cls) in ((n, _kind(n)) for n in shown)
+    )
+    more = (
+        f'<li><span class="kind">MORE</span><span class="muted">…and {len(d["notable"]) - 15} more '
+        "(see the sections below)</span></li>"
+        if len(d["notable"]) > 15
+        else ""
+    )
+    return f'<section class="panel" aria-label="What changed"><ul class="notable">{items}{more}</ul></section>'
 
-    notable = ""
-    if d["notable"]:
-        shown = d["notable"][:15]
-        items = "".join(
-            f'<li><span class="kind {cls}">{label}</span><span>{esc(n)}</span></li>'
-            for n, (label, cls) in ((n, _kind(n)) for n in shown)
-        )
-        more = (
-            f'<li><span class="kind">MORE</span><span class="muted">…and {len(d["notable"]) - 15} more '
-            "(see the sections below)</span></li>"
-            if len(d["notable"]) > 15
-            else ""
-        )
-        notable = f'<section class="panel" aria-label="What changed"><ul class="notable">{items}{more}</ul></section>'
+
+def _change_map(d: dict) -> tuple[str, set[int]]:
+    """The "Where it changed" bars, one row per section, and the bar widths they use (each needs one CSS class,
+    because the CSP forbids inline style attributes)."""
+    widths: set[int] = set()
     peak = max([1] + [max(len(s["added"]), len(s["removed"])) for s in d["sections"].values()])
     rows = []
     for key, s in d["sections"].items():
@@ -301,11 +301,16 @@ def render(d: dict) -> str:
             f'<span class="half"><i class="ad bw{wa}"></i></span></span>'
             f'<span class="cnt">+{na} / −{nr}{f" / ~{nc}" if nc else ""}</span></div>'
         )
-    change_map = (
+    html_ = (
         '<section class="panel map" aria-label="Where the changes are"><p class="sect-title">Where it changed</p>'
         f'{"".join(rows)}<div class="legend"><span><i class="lg-rm"></i>removed</span>'
         '<span><i class="lg-ad"></i>added</span></div></section>'
     )
+    return html_, widths
+
+
+def _tiles(b: dict, a: dict) -> str:
+    """One tile per run statistic: its value now, the change, and what it was before."""
     tiles = ""
     for k in b["stats"]:
         was, now = b["stats"][k], a["stats"][k]
@@ -316,6 +321,11 @@ def render(d: dict) -> str:
             f'<div class="panel tile"><div class="k">{esc(k.replace("_", " "))}</div>'
             f'<div class="big num">{now}{sign}</div><div class="was num">was {was}</div></div>'
         )
+    return tiles
+
+
+def _nav_and_sections(d: dict) -> tuple[list[str], list[str]]:
+    """The jump links and the collapsible section for each kind of change."""
     nav, sections = [], []
     for key, s in d["sections"].items():
         count = _count(s)
@@ -329,12 +339,32 @@ def render(d: dict) -> str:
             f'<details class="panel sec" id="sec-{key}"{" open" if count else ""}><summary><h2>{NAMES[key]}</h2>'
             f'<span class="pills">{pills}</span></summary>{body}</details>'
         )
-    verdict = ""
-    if d["integrity"]["before"] != d["integrity"]["after"]:
-        verdict = (
-            f'<p class="panel run">Recording verdict changed: {esc(d["integrity"]["before"])} '
-            f"→ {esc(d['integrity']['after'])}</p>"
-        )
+    return nav, sections
+
+
+def _verdict_note(d: dict) -> str:
+    """A note, only when the recording verdict differs between the two runs."""
+    if d["integrity"]["before"] == d["integrity"]["after"]:
+        return ""
+    return (
+        f'<p class="panel run">Recording verdict changed: {esc(d["integrity"]["before"])} '
+        f"→ {esc(d['integrity']['after'])}</p>"
+    )
+
+
+def render(d: dict) -> str:
+    """A diff result as one standalone HTML page, with no script. Everything is escaped, and its CSP allows nothing but
+    its own stylesheet, by a per-render nonce, and no network."""
+    from . import __version__
+
+    nonce = secrets.token_urlsafe(18)
+    b, a = d["before"], d["after"]
+    n_changes = sum(_count(s) for s in d["sections"].values())
+    notable = _notable_panel(d)
+    change_map, widths = _change_map(d)
+    tiles = _tiles(b, a)
+    nav, sections = _nav_and_sections(d)
+    verdict = _verdict_note(d)
     bar_css = "".join(f".bw{w}{{width:{w}%}}" for w in sorted(widths))
     bar_css += ".lg-rm{background:var(--critical)}.lg-ad{background:var(--good)}"
     title = "tracewatch diff: " + (a["cmdline"] or a["id"])[:80]
@@ -356,7 +386,7 @@ def render(d: dict) -> str:
 <body>
 <main>
 <h1>tracewatch <small>diff</small></h1>
-<div class="runs">{run_card("Before", "before", b)}<div class="arrow" aria-hidden="true">→</div>{run_card("After", "after", a)}</div>
+<div class="runs">{_run_card("Before", "before", b)}<div class="arrow" aria-hidden="true">→</div>{_run_card("After", "after", a)}</div>
 {_hero(d, n_changes)}
 {verdict}
 <div class="grid2">{notable}{change_map}</div>
