@@ -46,9 +46,9 @@ tracewatch is an experiment, not a security product. This is what it does not do
 
 ## Platform
 
-- **Linux only.** Developed and tested on WSL2 with Docker Desktop; plain Linux with Docker should work but has been
-  exercised less. No Windows or macOS support.
-- **Needs a privileged Docker container** for Tracee (host PID namespace). See [SECURITY.md](../SECURITY.md).
+- **Linux only.** Developed and tested on WSL2 (Docker Desktop and Docker Engine, kernel 6.18); plain Linux with Docker
+  should work but has not been exercised. No Windows or macOS support.
+- **Needs a Docker container with elevated capabilities** for Tracee (host PID namespace, `SYS_ADMIN` among them). See [SECURITY.md](../SECURITY.md).
 - **Slow start**: about five seconds before the target runs and two more after it ends.
 - Tested with Tracee v0.24.1 only.
 
