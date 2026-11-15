@@ -120,7 +120,8 @@ flagged. CI runs the same checks plus type checking, a dependency audit and the 
 Commit messages: a summary of 72 characters or fewer in the imperative, a blank line, then a body that says why. The
 `commit-msg` hook (enabled by `make setup`) checks this.
 
-Integration tests (`tests/integration/*.sh`) record real processes and need Docker and the Tracee image.
+Integration tests (`tests/integration/*.sh`) record real processes and need Docker and the Tracee image. CI does not run
+them; run them before a release and after changing the container flags in `src/tracewatch/tracee.py`.
 The browser tests (`tests/browser/run.py`; run `uv run playwright install chromium` first, `TW_BROWSER=firefox` for
 Firefox) check the interactive report's behavior, accessibility basics, and the security properties of the embedded data.
 `tests/browser/axe_check.py` runs an optional axe-core accessibility audit. `tools/audit.py` checks a repository for
