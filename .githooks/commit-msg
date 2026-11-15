@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# Commit message checks: a short summary line, a blank line before any body, and no tool attribution.
+# Enable with:  git config core.hooksPath .githooks   (make setup does this for you)
+# Skip once, if you must:  git commit --no-verify
+#
+# The convention: a summary of 72 characters or fewer in the imperative ("Add a hook", not "Added a hook"), then a
+# blank line, then a body that says WHY the change was made if that is not obvious.
+set -euo pipefail
+
+msg_file=$1
+# Git's own comment lines (from the editor template) are not part of the message.
+message=$(grep -v '^#' "$msg_file" || true)
+subject=$(printf '%s\n' "$message" | sed -n '1p')
+second=$(printf '%s\n' "$message" | sed -n '2p')
+
+fail() {
+  echo "commit-msg: $1" >&2
+  echo "            (git commit --no-verify skips this check once)" >&2
+  exit 1
+}
+
+# Messages git writes itself are not ours to shorten.
+case "$subject" in
+  "Merge "* | "Revert "* | "fixup! "* | "squash! "*) exit 0 ;;
+esac
+
+[ -n "$subject" ] || fail "the summary line is empty. Start with a short imperative summary, for example: Add a thing."
+
+length=$(printf '%s' "$subject" | LC_ALL=C.UTF-8 wc -m | tr -d ' ')
+[ "$length" -le 72 ] || fail "the summary line is $length characters; keep it to 72 or fewer and put the detail in the body."
+
+[ -z "$second" ] || fail "leave a blank line after the summary line, then write the body."
+
+if printf '%s\n' "$message" | grep -Eiq 'co-authored-by:.*(claude|anthropic)|generated with \[?claude'; then
+  fail "the message credits a tool (Co-Authored-By or 'Generated with' Claude). Remove that line."
+fi
