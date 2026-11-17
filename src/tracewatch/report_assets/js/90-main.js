@@ -59,12 +59,15 @@ function toggleMore(force) {
   const m = $('#morepanel'), on = force === undefined ? !m.classList.contains('on') : force;
   m.classList.toggle('on', on); const b = $('.tab.more'); if (b) b.setAttribute('aria-expanded', String(on));
 }
+// The views that never read the search query. Searching from one of them would look broken, so it moves to Commands.
+const SEARCHLESS_TABS = new Set(['overview', 'run']);
+function searchPatch(q) { return q && SEARCHLESS_TABS.has(S.tab) ? { q, tab: 'commands' } : { q }; }
 function buildShell() {
   const app = h('div', { id: 'app' });
   const [vcss, vicon, vlabel] = verdictOf();
   const search = h('input', { id: 'search', type: 'search', placeholder: 'Search commands, hosts, paths…   /', 'aria-label': 'Search everything', autocomplete: 'off', spellcheck: 'false' });
   let timer = 0;
-  search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => setState({ q: search.value.trim() }), 110); });
+  search.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => setState(searchPatch(search.value.trim())), 110); });
   const top = h('header', { id: 'top' },
     h('h1', { class: 'sr' }, 'tracewatch report: ' + short(oneLine(DATA.run.cmdline), 70)),
     h('div', { class: 'brand' }, logo()),
