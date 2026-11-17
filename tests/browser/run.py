@@ -144,6 +144,14 @@ def run_demo(b, demo_dir):
         }
     )
     check(f"'flagged paths only' keeps exactly the flagged processes and their ancestors ({flagged})", flagged == want)
+    # --- searching from a view that ignores the query moves to Commands
+    for start in ("overview", "run"):
+        s.tab(start)
+        p.fill("#search", "curl")
+        p.wait_for_timeout(450)
+        check(f"searching from {start} jumps to Commands", p.evaluate("location.hash").startswith("#/commands"))
+        p.fill("#search", "")
+        p.wait_for_timeout(450)
     # --- global search -> commands
     s.tab("commands")
     total = n_rows(s)
